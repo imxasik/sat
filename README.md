@@ -16,6 +16,7 @@ Professional microwave satellite imagery viewer for tropical cyclones and active
 - 📡 **Microwave Focus** — Highlights microwave sensors and products
 - 🛟 **Resilient Official Delivery** — short-lived same-origin cache, agency-specific source status, and a clearly labelled last-published fallback
 - 📈 **Independent Agency Analyses** — every card reads only its own publisher: JTWC/PGTW reasoning, IMD/DEMS satellite-fix PDFs, JMA/TCAC Tokyo, NHC/TAFB, PAGASA, Taiwan CWA, CMA/NMC, KMA, Météo-France La Réunion, or Australia BoM. Dvorak values and operational analyses are clearly distinguished; one agency’s value is never copied into another card.
+- 🛰️ **Separate UW–CIMSS guidance** — currently published objective satellite products are rendered apart from the agency cards, with their own CIMSS source links.
 
 ## 📁 Files
 
@@ -26,8 +27,8 @@ Professional microwave satellite imagery viewer for tropical cyclones and active
 | `app.js` | Application logic (fetches data directly from NRL API) |
 | `index.php` | PHP version of the main page (for PHP hosting) |
 | `api.php` | PHP proxy (optional, for hosts that block CORS) |
-| `fix.php` | Production multi-agency analysis endpoint; reads each official publisher separately |
-| `fix.js` | Zero-dependency local preview server with the same multi-agency `/fix.php` endpoint |
+| `fix.php` | Production agency-analysis and separate UW–CIMSS objective-products endpoint |
+| `fix.js` | Zero-dependency local preview server with the same `/fix.php` endpoint |
 | `.htaccess` | Apache configuration (for shared hosting) |
 
 ## 🚀 Deployment
@@ -79,7 +80,7 @@ setInterval(() => loadProducts(false), 5 * 60 * 1000); // Every 5 minutes
 
 ## 📡 Data Source
 
-All satellite data is provided by the [U.S. Naval Research Laboratory](https://science.nrlmry.navy.mil/geoips/tcweb4/) GeoIPS Tropical Cyclone Web system. This is publicly available data for educational and research purposes.
+Imagery is provided by the [U.S. Naval Research Laboratory](https://science.nrlmry.navy.mil/geoips/tcweb4/) GeoIPS Tropical Cyclone Web system. The separate automated-guidance panel reads [UW–CIMSS tropical-cyclone products](https://tropic.ssec.wisc.edu/) when available. These are publicly available data for educational and research purposes.
 
 ## 📱 Keyboard Shortcuts
 
@@ -98,3 +99,9 @@ MIT License — Free for personal and commercial use.
 
 - **Data:** U.S. Naval Research Laboratory (NRL)
 - **Design:** Custom-built with ❤️
+
+## Analysis provenance and UW–CIMSS products
+
+JTWC can receive estimates from other operational centres through WMO/GTS, regional coordination, or direct forecaster communication and include them in its own prognostic reasoning. A line in that JTWC table establishes that **JTWC received/reported it**; it does not establish that the named agency publicly published that value. For that reason the dashboard uses the JTWC text only for the JTWC card and only fills another centre’s card from that centre’s own public product.
+
+The separate **UW–CIMSS Objective Satellite Products** panel is deliberately not an agency-analysis panel. It retrieves the selected storm’s live CIMSS summary and displays each numerical product currently exposed there, including ADT, AiDT, D-PRINT, D-MINT, microwave sounders, SATCON, AI-RI, ARCHER, M-PERC, and vertical shear, plus published ADT and SATCON detail fields. These are automated/objective satellite algorithms and may be unavailable depending on the storm, processing, basin, and satellite coverage; they do not replace analyst fixes, forecasts, or warnings.

@@ -120,9 +120,34 @@ header("Expires: 0");
             <div class="dvorak-section-foot" id="dvorakMeta">
                 <span class="dvorak-source-note">Source: each agency’s own official bulletin, advisory, or satellite analysis — values are never copied between agencies.</span>
             </div>
+
+            <details class="analysis-provenance-note">
+                <summary>Why can JTWC list another agency’s T-number?</summary>
+                <p>JTWC may receive an analyst estimate through operational exchange (such as WMO/GTS, regional coordination, or direct forecaster communication) and quote it in its prognostic reasoning. That proves JTWC received and reported the line; it does not prove that the named agency publicly published the same value. This panel therefore uses JTWC only for the JTWC card and checks every other agency’s own public product.</p>
+            </details>
         </section>
 
-        <!-- Filters Section -->
+
+
+        <!-- UW-CIMSS Objective Satellite Products -->
+        <section class="cimss-section" id="cimssPanel" aria-labelledby="cimssTitle" aria-live="polite">
+            <div class="cimss-section-head">
+                <div>
+                    <div class="cimss-eyebrow">UW–CIMSS · OBJECTIVE SATELLITE GUIDANCE</div>
+                    <h2 id="cimssTitle">CIMSS Intensity, Position & Structure</h2>
+                    <p id="cimssStatus">Select a storm to load numerical fields currently published in the CIMSS product summary.</p>
+                </div>
+                <a class="cimss-home-link" href="https://tropic.ssec.wisc.edu/" target="_blank" rel="noopener">CIMSS products ↗</a>
+            </div>
+            <div class="cimss-product-grid is-idle" id="cimssGrid">
+                <div class="cimss-empty">ADT, AiDT, D-PRINT, D-MINT, microwave sounders, SATCON, AI-RI, ARCHER, M-PERC and shear fields will appear here when CIMSS publishes a storm summary.</div>
+            </div>
+            <div class="cimss-section-foot" id="cimssMeta">
+                <span>Objective satellite guidance is separate from official human agency analyses and warnings.</span>
+            </div>
+        </section>
+
+                <!-- Filters Section -->
         <section class="filters-section">
             <button class="filters-toggle" id="filtersToggle">
                 <span>

@@ -244,6 +244,7 @@ function buildUnavailable(reference, message, status = 'not_available', attempts
         issued: null,
         fetched_at: new Date().toISOString(),
         attempts,
+        cimss: null,
         agency_statuses: AGENCY_CATALOG.map(agency => agencyStatus(agency.id, 'not_checked', 'No agency source was checked for this request.')),
         common_agencies: COMMON_AGENCIES,
         agency_catalog: AGENCY_CATALOG
@@ -743,6 +744,257 @@ async function fetchIndependentAgencyFixes(reference) {
 }
 
 // ---------------------------------------------------------------------------
+// UW-CIMSS objective satellite products
+// ---------------------------------------------------------------------------
+// CIMSS products are automated satellite guidance, not an agency's subjective
+// Dvorak fix.  They are therefore returned in a separate payload and rendered
+// in a separate panel so they cannot be mistaken for a human agency analysis.
+const CIMSS_BASE = 'https://tropic.ssec.wisc.edu';
+
+function cimssStormReference(reference) {
+    const match = String(reference.stormId || '').match(/^([a-z]{2})(\d{2})(\d{4})/i);
+    if (!match) return null;
+    const originalBasin = normaliseText(reference.basin).split(' ')[0];
+    const basin = basinForReference(reference);
+    const suffix = {
+        AL: 'L', EP: 'E', CP: 'C', WP: 'W', SI: 'S', SP: 'P', SH: 'S',
+        NI: ['B', 'BOB'].includes(originalBasin) ? 'B' : 'A',
+        IO: ['B', 'BOB'].includes(originalBasin) ? 'B' : 'A'
+    }[basin];
+    return suffix ? { id: `${match[2]}${suffix}`, year: match[3] } : null;
+}
+
+function cimssText(value) {
+    return decodeEntities(String(value || '')
+        .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
+        .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '')
+        .replace(/<(?:br|\/tr|\/p|\/h[1-6]|\/table)\s*\/?>/gi, '\n')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\r/g, '')
+        .replace(/[ \t]+/g, ' ')
+        .replace(/\n\s*\n+/g, '\n')
+        .trim());
+}
+
+function cimssMetric(label, value) {
+    const clean = String(value || '').replace(/\s+/g, ' ').trim();
+    return clean ? { label, value: clean } : null;
+}
+
+function cimssProduct(id, label, source, observedAt, metrics, description = '') {
+    return {
+        id, label, source, observed_at: observedAt || null, description,
+        metrics: metrics.filter(Boolean)
+    };
+}
+
+function cimssSegment(text, startPattern, endPatterns) {
+    const start = text.search(startPattern);
+    if (start === -1) return '';
+    const after = text.slice(start);
+    let end = after.length;
+    endPatterns.forEach(pattern => {
+        const found = after.search(pattern);
+        if (found > 0 && found < end) end = found;
+    });
+    return after.slice(0, end);
+}
+
+function cimssTimestamp(segment) {
+    const match = String(segment).match(/(\d{1,2}[A-Za-z]{3}\d{4})\s+(\d{4})\s*UTC/i);
+    return match ? `${match[1]} ${match[2]}UTC` : null;
+}
+
+function cimssVmaxMslp(segment) {
+    const match = String(segment).match(/(?:\d{1,2}[A-Za-z]{3}\d{4}\s+\d{4}\s*UTC\s+)?(\d{1,3})\s*kts?\s+(\d{3,4}(?:\.\d+)?)\s*hPa/i);
+    return {
+        vmax: match ? `${match[1]} kt` : null,
+        mslp: match ? `${match[2]} hPa` : null
+    };
+}
+
+function parseCimssSummary(text, cimssReference, source) {
+    const clean = cimssText(text);
+    if (!new RegExp(`Tropical Cyclone\\s+${cimssReference.id}\\b`, 'i').test(clean)) return null;
+    const id = cimssReference.id;
+    const year = cimssReference.year;
+    const sourceFor = {
+        ADT: `${CIMSS_BASE}/real-time/adt/odt${id}.html`,
+        AIDT: `${CIMSS_BASE}/real-time/adt/AiDT/${id}.AiDT.V2.html`,
+        DPRINT: `${CIMSS_BASE}/real-time/DPRINT/${year}/${year}_${id}_history_IR.html`,
+        DMINT: `${CIMSS_BASE}/real-time/DMINT/${year}/${year}_${id}_history_MWIR.html`,
+        MWSOUNDERS: `${CIMSS_BASE}/real-time/atms/archive/${year}/${year}${id}.html`,
+        SATCON: `${CIMSS_BASE}/real-time/satcon/${year}${id}.html`,
+        AIRI: `${CIMSS_BASE}/real-time/ai-ri/#${encodeURIComponent(referenceNameFromCimss(clean) || id)}`,
+        ARCHER: `${CIMSS_BASE}/real-time/arch-all/cyclones/${year}_${id}/web/summaryTable.html`,
+        MPERC: `${CIMSS_BASE}/real-time/arch-all/cyclones/${year}_${id}/web/summaryTableERC.html`,
+        SHEAR: `${CIMSS_BASE}/real-time/${cimssBasinDirectory(id)}/storm/shear/shear.${id}.txt`
+    };
+    const products = [];
+    const adt = cimssSegment(clean, /\bADT\b/, [/\bAiDT-V?2?\b/i, /\bDPRINT\b/i]);
+    if (adt) {
+        const winds = cimssVmaxMslp(adt);
+        const scene = adt.match(/Scene\s+CI#\s+FT#\s+AdjT#\s+RawT#\s+Eye T\s+Cloud T\s*\n?\s*([^\s]+)\s+(\d(?:\.\d+)?)\s+(\d(?:\.\d+)?)\s+(\d(?:\.\d+)?)\s+(\d(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?C)\s+(-?\d+(?:\.\d+)?C)/i);
+        products.push(cimssProduct('ADT', 'ADT v9.1', sourceFor.ADT, cimssTimestamp(adt), [
+            cimssMetric('Vmax', winds.vmax), cimssMetric('MSLP', winds.mslp),
+            cimssMetric('Scene', scene && scene[1]), cimssMetric('CI#', scene && scene[2]),
+            cimssMetric('Final T#', scene && scene[3]), cimssMetric('Adj T#', scene && scene[4]),
+            cimssMetric('Raw T#', scene && scene[5]), cimssMetric('Eye T', scene && scene[6]),
+            cimssMetric('Cloud T', scene && scene[7])
+        ], 'Automated infrared Advanced Dvorak Technique'));
+    }
+    const aidt = cimssSegment(clean, /\bAiDT-V?2?\b/i, [/\bDPRINT\b/i, /\bDMINT\b/i]);
+    if (aidt) {
+        const value = aidt.match(/(\d{1,3})\s*kts?/i);
+        products.push(cimssProduct('AIDT', 'AiDT v2', sourceFor.AIDT, cimssTimestamp(aidt), [cimssMetric('Vmax', value && `${value[1]} kt`)], 'AI-enhanced ADT wind estimate'));
+    }
+    const dprint = cimssSegment(clean, /\bDPRINT\b/i, [/\bDMINT\b/i, /\bMW Sounders\b/i]);
+    if (dprint) {
+        const winds = cimssVmaxMslp(dprint);
+        const range = dprint.match(/Vmax\s*25%\s+Vmax\s*75%\s*\n?\s*(\d{1,3})\s*kts?\s+(\d{1,3})\s*kts?/i);
+        products.push(cimssProduct('DPRINT', 'D-PRINT', sourceFor.DPRINT, cimssTimestamp(dprint), [
+            cimssMetric('Vmax', winds.vmax), cimssMetric('MSLP', winds.mslp),
+            cimssMetric('25th percentile', range && `${range[1]} kt`), cimssMetric('75th percentile', range && `${range[2]} kt`)
+        ], 'Deep-learning infrared intensity estimate'));
+    }
+    const dmint = cimssSegment(clean, /\bDMINT\b/i, [/\bMW Sounders\b/i, /\bSATCON\b/i]);
+    if (dmint) {
+        const winds = cimssVmaxMslp(dmint);
+        const info = dmint.match(/Vmax\s*25%\s+Vmax\s*75%\s+MW Instr\.\s*\n?\s*(\d{1,3})\s*kts?\s+(\d{1,3})\s*kts?\s+([A-Z0-9-]+)/i);
+        products.push(cimssProduct('DMINT', 'D-MINT', sourceFor.DMINT, cimssTimestamp(dmint), [
+            cimssMetric('Vmax', winds.vmax), cimssMetric('MSLP', winds.mslp),
+            cimssMetric('25th percentile', info && `${info[1]} kt`), cimssMetric('75th percentile', info && `${info[2]} kt`), cimssMetric('MW instrument', info && info[3])
+        ], 'Deep multi-sensor infrared/microwave intensity estimate'));
+    }
+    const sounders = cimssSegment(clean, /\bMW Sounders\b/i, [/\bSATCON\b/i, /\bRI Forecast\b/i]);
+    if (sounders) {
+        const winds = cimssVmaxMslp(sounders);
+        const detail = sounders.match(/Satellite\s+FOV\s*\n?\s*(?:\S+\s+)?(\d+)\s+(\d+)/i);
+        products.push(cimssProduct('MWSOUNDERS', 'Microwave Sounders', sourceFor.MWSOUNDERS, cimssTimestamp(sounders), [
+            cimssMetric('Vmax', winds.vmax), cimssMetric('MSLP', winds.mslp), cimssMetric('Satellite', detail && detail[1]), cimssMetric('FOV', detail && detail[2])
+        ], 'CIMSS microwave-sounding intensity estimate'));
+    }
+    const satcon = cimssSegment(clean, /\bSATCON\b/i, [/\bRI Forecast\b/i, /\bPosition Estimates\b/i]);
+    if (satcon) {
+        const winds = cimssVmaxMslp(satcon);
+        const members = satcon.match(/Consensus Members\s*\n?\s*([^\n]+)/i);
+        products.push(cimssProduct('SATCON', 'SATCON', sourceFor.SATCON, cimssTimestamp(satcon), [
+            cimssMetric('Vmax', winds.vmax), cimssMetric('MSLP', winds.mslp), cimssMetric('Members', members && members[1])
+        ], 'Satellite Consensus intensity estimate'));
+    }
+    const airi = cimssSegment(clean, /\bAI-RI\b/i, [/\bPosition Estimates\b/i, /\bTC Structure\b/i]);
+    if (airi) {
+        const current = airi.match(/(\d{1,3})\s*kts?\s+(\d{1,3})\s*kts?/i);
+        const probabilityMatches = [...airi.matchAll(/(\d+kt\/\d+h)\s+([\d.]+%)/gi)];
+        products.push(cimssProduct('AIRI', 'AI-RI', sourceFor.AIRI, cimssTimestamp(airi), [
+            cimssMetric('Current Vmax', current && `${current[1]} kt`), cimssMetric('Current MPI', current && `${current[2]} kt`),
+            ...probabilityMatches.map(item => cimssMetric(item[1], item[2]))
+        ], 'AI rapid-intensification guidance'));
+    }
+    const archer = cimssSegment(clean, /\bARCHER\b/i, [/\bTC Structure\b/i, /\bM-PERC\b/i]);
+    if (archer) {
+        const location = archer.match(/(\d{1,2}(?:\.\d+)?[NS])\s+(\d{1,3}(?:\.\d+)?[EW])/i);
+        const detail = archer.match(/Satellite\s+Sensor\s+Eye Diameter\s+Eye Cert\s*%\s*\n?\s*([^\s]+)\s+([^\s]+)\s+([\d.]+\s*deg)\s+([\d.]+%)/i);
+        products.push(cimssProduct('ARCHER', 'ARCHER', sourceFor.ARCHER, cimssTimestamp(archer), [
+            cimssMetric('Latitude', location && location[1]), cimssMetric('Longitude', location && location[2]),
+            cimssMetric('Satellite', detail && detail[1]), cimssMetric('Sensor', detail && detail[2]),
+            cimssMetric('Eye diameter', detail && detail[3]), cimssMetric('Eye certainty', detail && detail[4])
+        ], 'Automated microwave/IR center-position retrieval'));
+    }
+    const mperc = cimssSegment(clean, /\b(?:MPERC|M-PERC)\b/i, [/\bMIMIC-TPW\b/i, /\bShear Analysis\b/i]);
+    if (mperc) {
+        const probabilities = mperc.match(/(\d+(?:\.\d+)?%)\s+(\d+(?:\.\d+)?%)/);
+        products.push(cimssProduct('MPERC', 'M-PERC', sourceFor.MPERC, cimssTimestamp(mperc), [
+            cimssMetric('ERC onset (full)', probabilities && probabilities[1]), cimssMetric('ERC onset (V-based)', probabilities && probabilities[2])
+        ], 'Microwave probability of eyewall-replacement-cycle onset'));
+    }
+    const shear = cimssSegment(clean, /\bShear Analysis\b/i, [/\bTC-Scale AMVs\b/i]);
+    if (shear) {
+        const values = shear.match(/(\d+(?:\.\d+)?)\s*kts?\s+(\d+(?:\.\d+)?)\s*deg/i);
+        products.push(cimssProduct('SHEAR', 'Vertical Shear', sourceFor.SHEAR, cimssTimestamp(shear), [
+            cimssMetric('Magnitude', values && `${values[1]} kt`), cimssMetric('Direction', values && `${values[2]}°`)
+        ], 'CIMSS AMV-aided deep-layer vertical wind shear'));
+    }
+    return products;
+}
+
+function referenceNameFromCimss(text) {
+    const match = String(text).match(/Tropical Cyclone\s+\d{2}[A-Z]\s*\(([^)]+)\)/i);
+    return match ? match[1].trim() : '';
+}
+
+function cimssBasinDirectory(id) {
+    const letter = String(id).slice(-1).toUpperCase();
+    return { L: 'atlantic', E: 'eastpac', C: 'eastpac', W: 'westpac', A: 'northindian', B: 'northindian', S: 'southindian', P: 'australia' }[letter] || 'westpac';
+}
+
+function mergeCimssProductMetrics(products, id, metrics) {
+    const product = products.find(item => item.id === id);
+    if (!product) return;
+    metrics.filter(Boolean).forEach(metric => {
+        if (!product.metrics.some(existing => existing.label === metric.label)) product.metrics.push(metric);
+    });
+}
+
+function parseCimssAdtDetail(text) {
+    const clean = cimssText(text);
+    const position = clean.match(/Lat\s*:\s*([\d:]+\s*[NS])\s+Lon\s*:\s*([\d:]+\s*[EW])/i);
+    const ci = clean.match(/CI#\s*\/Pressure\/ Vmax\s*\n?\s*(\d(?:\.\d+)?)\s*\/\s*([\d.]+)mb\s*\/\s*([\d.]+)kt/i);
+    const tNumbers = clean.match(/Final T#\s+Adj T#\s+Raw T#\s*\n?\s*(\d(?:\.\d+)?)\s+(\d(?:\.\d+)?)\s+(\d(?:\.\d+)?)/i);
+    const scene = clean.match(/Scene Type\s*:\s*([^\n]+)/i);
+    const satellite = clean.match(/Satellite Name\s*:\s*([^\n]+)/i);
+    const radii = [...clean.matchAll(/(?:NE|SE|SW|NW)\s*\n?\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)/gi)];
+    return [
+        cimssMetric('Latitude', position && position[1]), cimssMetric('Longitude', position && position[2]),
+        cimssMetric('CI#', ci && ci[1]), cimssMetric('MSLP', ci && `${ci[2]} hPa`), cimssMetric('Vmax', ci && `${ci[3]} kt`),
+        cimssMetric('Final T#', tNumbers && tNumbers[1]), cimssMetric('Adj T#', tNumbers && tNumbers[2]), cimssMetric('Raw T#', tNumbers && tNumbers[3]),
+        cimssMetric('Scene detail', scene && scene[1]), cimssMetric('Satellite', satellite && satellite[1]),
+        ...radii.flatMap((row, index) => ['NE', 'SE', 'SW', 'NW'].slice(index, index + 1).map(quadrant => cimssMetric(`${quadrant} R34/R50/R64`, `${row[1]}/${row[2]}/${row[3]} nm`)))
+    ];
+}
+
+function parseCimssSatconDetail(text) {
+    const clean = cimssText(text);
+    const current = clean.match(/SATCON:\s*MSLP\s*=\s*([\d.]+)\s*hPa\s+MSW\s*=\s*([\d.]+)\s*knots/i);
+    const consensus = clean.match(/SATCON Member Consensus:\s*([\d.]+)\s*knots/i);
+    const pressureWind = clean.match(/Pressure\s*->\s*Wind Using SATCON MSLP:\s*([\d.]+)\s*knots/i);
+    const outer = clean.match(/Distance to Outer Closed Isobar Used is\s*([\d.]+)\s*nm/i);
+    const eye = clean.match(/Eye Size Correction Used is\s*([\d.]+)\s*knots/i);
+    const memberLines = [...clean.matchAll(/(?:ADT|CIMSS AMSU|ATMS|SSMIS|CIRA ATMS):\s*([\d.]+)?\s*hPa\s*([\d.]+)?\s*knots[^\n]*/gi)];
+    return [
+        cimssMetric('MSLP', current && `${current[1]} hPa`), cimssMetric('Vmax', current && `${current[2]} kt`),
+        cimssMetric('Member consensus', consensus && `${consensus[1]} kt`), cimssMetric('Pressure-wind', pressureWind && `${pressureWind[1]} kt`),
+        cimssMetric('Outer closed isobar', outer && `${outer[1]} nm`), cimssMetric('Eye-size correction', eye && `${eye[1]} kt`),
+        ...memberLines.map(item => cimssMetric(`Member ${item[0].split(':')[0]}`, item[0].replace(/\s+/g, ' ')))
+    ];
+}
+
+async function fetchCimssProducts(reference) {
+    const storm = cimssStormReference(reference);
+    if (!storm) return { status: 'not_available', message: 'No CIMSS-compatible tropical-cyclone identifier can be formed for this storm.', source: CIMSS_BASE, products: [] };
+    const summaryURL = `${CIMSS_BASE}/real-time/summary/summary.${storm.id}_${storm.year}.html`;
+    try {
+        const summary = await fetchOfficialPage(summaryURL, 16000);
+        const products = parseCimssSummary(summary, storm, summaryURL);
+        if (!products || !products.length) {
+            return { status: 'not_published', message: 'CIMSS has no active product summary for this storm.', source: summaryURL, storm_id: storm.id, products: [] };
+        }
+        const [adtDetail, satconDetail] = await Promise.all([
+            fetchOfficialPage(`${CIMSS_BASE}/real-time/adt/odt${storm.id}.html`, 16000).catch(() => ''),
+            fetchOfficialPage(`${CIMSS_BASE}/real-time/satcon/${storm.year}${storm.id}.html`, 16000).catch(() => '')
+        ]);
+        if (adtDetail) mergeCimssProductMetrics(products, 'ADT', parseCimssAdtDetail(adtDetail));
+        if (satconDetail) mergeCimssProductMetrics(products, 'SATCON', parseCimssSatconDetail(satconDetail));
+        return {
+            status: 'ok', message: '', source: summaryURL, storm_id: storm.id,
+            fetched_at: new Date().toISOString(), products
+        };
+    } catch (error) {
+        return { status: 'source_unavailable', message: 'The UW-CIMSS product summary could not be reached right now.', source: summaryURL, storm_id: storm.id, products: [] };
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Last-published store (official values only, always labelled)
 // ---------------------------------------------------------------------------
 function lastGoodPath(reference) {
@@ -781,6 +1033,7 @@ function buildSuccess(reference, parsed, source, sourceKind) {
         stale: false,
         issued: parsed.issued || null,
         fetched_at: new Date().toISOString(),
+        cimss: null,
         agency_statuses: [],
         common_agencies: COMMON_AGENCIES,
         agency_catalog: AGENCY_CATALOG
@@ -796,6 +1049,7 @@ async function locateAndParse(reference) {
     // Start independent publisher requests immediately. A slow JTWC failover
     // chain must not delay CWA, KMA, PAGASA, JMA, IMD, etc.
     const independentPromise = fetchIndependentAgencyFixes(reference);
+    const cimssPromise = fetchCimssProducts(reference);
 
     // Only PGTW is read from a JTWC product. The published table can include
     // other agency names, but those rows are intentionally not copied into
@@ -825,7 +1079,7 @@ async function locateAndParse(reference) {
         agencyStatuses.push(agencyStatus('PGTW', 'outside_responsibility', 'JTWC has no prognostic-reasoning product for this basin.'));
     }
 
-    const independent = await independentPromise;
+    const [independent, cimss] = await Promise.all([independentPromise, cimssPromise]);
     agencyFixes.push(...independent.fixes);
     agencyStatuses.push(...independent.statuses);
 
@@ -835,6 +1089,7 @@ async function locateAndParse(reference) {
         const payload = buildSuccess(reference, parsed, firstSource, agencyFixes[0].source_kind || 'official');
         payload.attempts = attempts;
         payload.agency_statuses = agencyStatuses;
+        payload.cimss = cimss;
         payload.message = 'Each agency card is populated only from that agency’s own official publication. Operational-analysis values retain the agency’s published units.';
         saveLastGood(reference, payload);
         return payload;
@@ -850,6 +1105,7 @@ async function locateAndParse(reference) {
             stale: true,
             attempts,
             agency_statuses: agencyStatuses,
+            cimss,
             retrieved_at: new Date(lastGood.savedAt).toISOString(),
             message: `Live agency sources are unreachable right now. Showing the last agency-published values (retrieved ${ageMinutes} minute${ageMinutes === 1 ? '' : 's'} ago); no value is estimated.`
         };
@@ -862,6 +1118,7 @@ async function locateAndParse(reference) {
         attempts
     );
     payload.agency_statuses = agencyStatuses;
+    payload.cimss = cimss;
     return payload;
 }
 async function dvorakService(searchParams) {
@@ -984,6 +1241,11 @@ module.exports = {
     parseCmaAnalysis,
     parseDemsBulletin,
     parseJmaTcaXml,
+    parseCimssSummary,
+    parseCimssAdtDetail,
+    parseCimssSatconDetail,
+    cimssStormReference,
+    fetchCimssProducts,
     basinForReference,
     fetchIndependentAgencyFixes,
     AGENCY_CATALOG,

@@ -176,7 +176,11 @@
             dvorakStatus: $('dvorakStatus'),
             dvorakGrid: $('dvorakGrid'),
             dvorakMeta: $('dvorakMeta'),
-            dvorakRefresh: $('dvorakRefresh')
+            dvorakRefresh: $('dvorakRefresh'),
+            cimssPanel: $('cimssPanel'),
+            cimssStatus: $('cimssStatus'),
+            cimssGrid: $('cimssGrid'),
+            cimssMeta: $('cimssMeta')
         };
     }
 
@@ -817,6 +821,73 @@ function updateStormBanner(storm) {
             </article>`;
     }
 
+    // UW–CIMSS cards are deliberately data-driven. The service returns every
+    // numeric field exposed by its live storm summary; it is never folded into
+    // the human-agency Dvorak cards above.
+    function isCimssSourceURL(value) {
+        try {
+            const url = new URL(value);
+            return url.protocol === 'https:' && /(^|\.)tropic\.ssec\.wisc\.edu$/i.test(url.hostname);
+        } catch {
+            return false;
+        }
+    }
+
+    function showCimssLoading(storm) {
+        if (!DOM.cimssGrid) return;
+        DOM.cimssPanel?.classList.remove('has-error');
+        DOM.cimssPanel?.classList.add('is-loading');
+        DOM.cimssStatus.textContent = `Loading currently available UW–CIMSS objective products for ${getStormDisplayName(storm)}…`;
+        DOM.cimssGrid.className = 'cimss-product-grid is-loading';
+        DOM.cimssGrid.innerHTML = Array.from({ length: 4 }, () => `
+            <div class="cimss-product-card cimss-skeleton" aria-hidden="true"><span></span><strong></strong><i></i>
+            </div>`).join('');
+        if (DOM.cimssMeta) DOM.cimssMeta.textContent = 'Checking the CIMSS real-time storm summary and linked numerical-product details…';
+    }
+
+    function renderCimssUnavailable(cimss, storm) {
+        if (!DOM.cimssGrid) return;
+        DOM.cimssPanel?.classList.remove('is-loading');
+        DOM.cimssPanel?.classList.add('has-error');
+        DOM.cimssStatus.textContent = `No current CIMSS objective product summary is available for ${getStormDisplayName(storm)}.`;
+        DOM.cimssGrid.className = 'cimss-product-grid is-unavailable';
+        DOM.cimssGrid.innerHTML = `<div class="cimss-empty cimss-empty-warning"><strong>CIMSS products unavailable for this storm</strong><span>${esc(cimss?.message || 'CIMSS may not publish every automated product for every storm, time, basin, or satellite pass.')}</span></div>`;
+        if (DOM.cimssMeta) {
+            const source = isCimssSourceURL(cimss?.source) ? `<a href="${esc(cimss.source)}" target="_blank" rel="noopener">Open CIMSS storm summary ↗</a>` : '';
+            DOM.cimssMeta.innerHTML = `<span>Automated satellite guidance remains separate from agency analyst fixes. ${source}</span>`;
+        }
+    }
+
+    function createCimssCard(product) {
+        const metrics = Array.isArray(product?.metrics) ? product.metrics.filter(metric => metric && metric.label && metric.value) : [];
+        const link = isCimssSourceURL(product?.source)
+            ? `<a class="cimss-card-link" href="${esc(product.source)}" target="_blank" rel="noopener">Open CIMSS product ↗</a>`
+            : '';
+        const observed = product?.observed_at ? `<span class="cimss-time">${esc(product.observed_at)}</span>` : '';
+        return `<article class="cimss-product-card">
+            <div class="cimss-card-top"><h3>${esc(product?.label || product?.id || 'CIMSS product')}</h3>${observed}</div>
+            ${product?.description ? `<p>${esc(product.description)}</p>` : ''}
+            <dl class="cimss-metrics">${metrics.map(metric => `<div><dt>${esc(metric.label)}</dt><dd>${esc(metric.value)}</dd></div>`).join('')}</dl>
+            ${link}
+        </article>`;
+    }
+
+    function renderCimssProducts(cimss, storm) {
+        if (!DOM.cimssGrid) return;
+        const products = Array.isArray(cimss?.products) ? cimss.products : [];
+        if (!cimss || cimss.status !== 'ok' || !products.length) {
+            renderCimssUnavailable(cimss, storm);
+            return;
+        }
+        DOM.cimssPanel?.classList.remove('is-loading', 'has-error');
+        DOM.cimssStatus.textContent = `${getStormDisplayName(storm)} • ${products.length} currently published CIMSS objective product${products.length === 1 ? '' : 's'}`;
+        DOM.cimssGrid.className = 'cimss-product-grid';
+        DOM.cimssGrid.innerHTML = products.map(createCimssCard).join('');
+        const checked = formatDvorakFetched(cimss.fetched_at);
+        const summary = isCimssSourceURL(cimss.source) ? `<a href="${esc(cimss.source)}" target="_blank" rel="noopener">CIMSS live storm summary ↗</a>` : 'CIMSS live storm summary';
+        if (DOM.cimssMeta) DOM.cimssMeta.innerHTML = `<span>Objective algorithms, not human agency Dvorak fixes · ${summary}${checked ? ` · checked ${esc(checked)}` : ''}. Availability changes with the active CIMSS publication, satellite coverage, and processing.</span>`;
+    }
+
     function renderDvorakUnavailable(data, storm) {
         if (!DOM.dvorakGrid) return;
         const displayName = getStormDisplayName(storm);
@@ -896,6 +967,7 @@ function updateStormBanner(storm) {
         const timeout = setTimeout(() => controller.abort(), 45000);
         setDvorakLoading(true);
         showDvorakLoading(storm);
+        showCimssLoading(storm);
 
         try {
             const response = await fetch(`${DVORAK_ENDPOINT}?${params.toString()}`, {
@@ -907,6 +979,7 @@ function updateStormBanner(storm) {
             const data = await response.json();
             if (requestId !== state.dvorakRequestId || state.activeStorm !== storm.properties.storm_id) return;
             renderDvorakFixes(data, storm);
+            renderCimssProducts(data.cimss, storm);
         } catch (error) {
             if (requestId !== state.dvorakRequestId) return;
             console.warn('Unable to load live Dvorak fixes:', error);
@@ -921,6 +994,9 @@ function updateStormBanner(storm) {
             }
             renderDvorakUnavailable({
                 message: 'Every official source and mirror failed from this device. Use Refresh to try again; no estimated values are shown.'
+            }, storm);
+            renderCimssUnavailable({
+                message: 'The combined live-source request did not complete. Use Refresh to try again; no automated value is estimated or carried over.'
             }, storm);
         } finally {
             clearTimeout(timeout);

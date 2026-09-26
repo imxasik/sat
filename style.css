@@ -1913,3 +1913,56 @@ a.dvorak-card-source:hover {
     color: var(--text-muted);
     font-weight: 600;
 }
+
+/* UW–CIMSS objective satellite products. This intentionally has a distinct
+   indigo/cyan treatment from the amber human-agency Dvorak panel. */
+.cimss-section {
+    margin: 22px 0;
+    padding: 20px;
+    border: 1px solid rgba(99, 102, 241, 0.32);
+    border-radius: 14px;
+    background: linear-gradient(135deg, rgba(30, 41, 59, 0.82), rgba(30, 27, 75, 0.34));
+    box-shadow: 0 12px 28px rgba(2, 6, 23, 0.22);
+}
+.cimss-section-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; }
+.cimss-eyebrow { color: #67e8f9; font-size: .65rem; font-weight: 800; letter-spacing: .12em; }
+.cimss-section h2 { margin: 4px 0; color: #e0e7ff; font-size: 1.16rem; }
+.cimss-section-head p { margin: 0; color: var(--text-secondary); font-size: .77rem; line-height: 1.45; }
+.cimss-home-link, .cimss-card-link, .cimss-section-foot a { color: #67e8f9; font-size: .7rem; font-weight: 700; text-decoration: none; }
+.cimss-home-link { flex: 0 0 auto; padding: 7px 9px; border: 1px solid rgba(103, 232, 249, .35); border-radius: 7px; }
+.cimss-home-link:hover, .cimss-card-link:hover, .cimss-section-foot a:hover { color: #cffafe; text-decoration: underline; }
+.cimss-product-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(225px, 1fr)); gap: 11px; margin-top: 17px; }
+.cimss-product-card { display: flex; min-width: 0; min-height: 145px; flex-direction: column; padding: 13px; border: 1px solid rgba(129, 140, 248, .28); border-radius: 10px; background: rgba(15, 23, 42, .66); }
+.cimss-card-top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.cimss-card-top h3 { margin: 0; color: #c7d2fe; font-size: .81rem; letter-spacing: .035em; }
+.cimss-time { overflow: hidden; color: #94a3b8; font-size: .61rem; text-overflow: ellipsis; white-space: nowrap; }
+.cimss-product-card > p { min-height: 28px; margin: 6px 0 8px; color: #94a3b8; font-size: .67rem; line-height: 1.35; }
+.cimss-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px 10px; margin: 0; }
+.cimss-metrics div { min-width: 0; }
+.cimss-metrics dt { overflow: hidden; color: #94a3b8; font-size: .59rem; text-overflow: ellipsis; white-space: nowrap; }
+.cimss-metrics dd { overflow: hidden; margin: 1px 0 0; color: #f1f5f9; font-family: var(--font-mono, ui-monospace, monospace); font-size: .72rem; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.cimss-card-link { margin-top: auto; padding-top: 10px; }
+.cimss-section-foot { margin-top: 13px; color: #94a3b8; font-size: .68rem; line-height: 1.45; }
+.cimss-empty { display: flex; grid-column: 1 / -1; flex-direction: column; gap: 4px; padding: 15px; border: 1px dashed rgba(148, 163, 184, .32); border-radius: 9px; color: #a5b4fc; font-size: .75rem; line-height: 1.45; }
+.cimss-empty span { color: #94a3b8; font-size: .7rem; }
+.cimss-empty-warning { border-color: rgba(245, 158, 11, .4); color: #fbbf24; }
+.cimss-section.has-error { border-color: rgba(245, 158, 11, .34); }
+.cimss-skeleton { overflow: hidden; position: relative; min-height: 145px; }
+.cimss-skeleton::after { position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,.08), transparent); content: ''; transform: translateX(-100%); animation: cimss-shimmer 1.25s infinite; }
+.cimss-skeleton span, .cimss-skeleton strong, .cimss-skeleton i { display: block; width: 47%; height: 10px; margin-bottom: 13px; border-radius: 4px; background: rgba(129, 140, 248, .16); }
+.cimss-skeleton strong { width: 82%; height: 21px; }.cimss-skeleton i { width: 65%; }
+@keyframes cimss-shimmer { to { transform: translateX(100%); } }
+@media (max-width: 640px) { .cimss-section { padding: 15px 14px; } .cimss-section-head { gap: 10px; } .cimss-home-link { padding: 6px 7px; font-size: .64rem; } .cimss-product-grid { grid-template-columns: 1fr; } }
+
+.analysis-provenance-note {
+    margin-top: 11px;
+    padding: 8px 10px;
+    border-left: 2px solid rgba(56, 189, 248, .55);
+    border-radius: 0 7px 7px 0;
+    background: rgba(14, 116, 144, .08);
+    color: var(--text-secondary);
+    font-size: .7rem;
+    line-height: 1.5;
+}
+.analysis-provenance-note summary { cursor: pointer; color: #7dd3fc; font-weight: 700; }
+.analysis-provenance-note p { margin: 7px 0 0; }

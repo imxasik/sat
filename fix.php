@@ -166,7 +166,7 @@ function unavailable(array $ref, string $message, string $status = 'not_availabl
     return ['status'=>$status,'message'=>$message,'storm_id'=>$ref['storm_id'],'storm_name'=>$ref['storm_name'],
         'product_id'=>$ref['product'] !== '' ? strtoupper(str_replace('prog.txt', '', $ref['product'])) : ($ref['nhc_id'] !== '' ? strtoupper($ref['nhc_id']) : null),
         'agencies'=>[],'automated'=>[],'source'=>null,'source_kind'=>null,'freshness'=>'unavailable','stale'=>false,'issued'=>null,
-        'fetched_at'=>gmdate('c'),'attempts'=>$attempts,'agency_statuses'=>$agencyStatuses,
+        'fetched_at'=>gmdate('c'),'attempts'=>$attempts,'cimss'=>null,'agency_statuses'=>$agencyStatuses,
         'common_agencies'=>COMMON_AGENCIES,'agency_catalog'=>AGENCY_CATALOG];
 }
 function success(array $ref, array $fixes, array $statuses, array $attempts): array {
@@ -175,7 +175,7 @@ function success(array $ref, array $fixes, array $statuses, array $attempts): ar
         'storm_id'=>$ref['storm_id'],'storm_name'=>$ref['storm_name'],
         'product_id'=>$ref['product'] !== '' ? strtoupper(str_replace('prog.txt', '', $ref['product'])) : ($ref['nhc_id'] !== '' ? strtoupper($ref['nhc_id']) : null),
         'agencies'=>$fixes,'automated'=>[],'source'=>$first['source'] ?? null,'source_kind'=>$first['source_kind'] ?? null,
-        'freshness'=>'live','stale'=>false,'issued'=>null,'fetched_at'=>gmdate('c'),'attempts'=>$attempts,
+        'freshness'=>'live','stale'=>false,'issued'=>null,'fetched_at'=>gmdate('c'),'attempts'=>$attempts,'cimss'=>null,
         'agency_statuses'=>$statuses,'common_agencies'=>COMMON_AGENCIES,'agency_catalog'=>AGENCY_CATALOG];
 }
 
@@ -326,6 +326,99 @@ function independent_fixes(array $ref): array {
     return ['fixes'=>$fixes,'statuses'=>$statuses];
 }
 
+// UW–CIMSS publishes objective, algorithmic satellite guidance. It is kept in
+// this separate response object and is never used to populate a human-agency card.
+const CIMSS_BASE = 'https://tropic.ssec.wisc.edu';
+function cimss_reference(array $ref): ?array {
+    if (!preg_match('/^([a-z]{2})(\d{2})(\d{4})/i', $ref['storm_id'], $m)) return null;
+    $raw = strtoupper((string)(preg_split('/\s+/', $ref['basin'])[0] ?? ''));
+    $b = basin($ref);
+    $suffixes = ['AL'=>'L','EP'=>'E','CP'=>'C','WP'=>'W','SI'=>'S','SP'=>'P','SH'=>'S','NI'=>in_array($raw,['B','BOB'],true)?'B':'A','IO'=>in_array($raw,['B','BOB'],true)?'B':'A'];
+    return isset($suffixes[$b]) ? ['id'=>$m[2].$suffixes[$b], 'year'=>$m[3]] : null;
+}
+function cimss_text(string $value): string {
+    $value = preg_replace('/<script\b[^>]*>.*?<\/script>|<style\b[^>]*>.*?<\/style>/is', '', $value) ?? $value;
+    $value = preg_replace('/<(?:br|\/tr|\/p|\/h[1-6]|\/table)\s*\/?>/i', "\n", $value) ?? $value;
+    $value = html_entity_decode(strip_tags($value), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    $value = str_replace("\r", '', $value);
+    $value = preg_replace('/[ \t]+/', ' ', $value) ?? $value;
+    return trim((string)(preg_replace('/\n\s*\n+/', "\n", $value) ?? $value));
+}
+function cimss_metric(string $label, ?string $value): ?array {
+    $value = trim((string)preg_replace('/\s+/', ' ', (string)$value));
+    return $value === '' ? null : ['label'=>$label,'value'=>$value];
+}
+function cimss_product(string $id, string $label, string $source, ?string $observed, array $metrics, string $description): array {
+    return ['id'=>$id,'label'=>$label,'source'=>$source,'observed_at'=>$observed,'description'=>$description,'metrics'=>array_values(array_filter($metrics))];
+}
+function cimss_segment(string $text, string $start, array $ends): string {
+    if (!preg_match($start, $text, $m, PREG_OFFSET_CAPTURE)) return '';
+    $chunk = substr($text, $m[0][1]); $end = strlen($chunk);
+    foreach ($ends as $pattern) if (preg_match($pattern, $chunk, $found, PREG_OFFSET_CAPTURE) && $found[0][1] > 0) $end = min($end, $found[0][1]);
+    return substr($chunk, 0, $end);
+}
+function cimss_time(string $text): ?string {
+    return preg_match('/(\d{1,2}[A-Za-z]{3}\d{4})\s+(\d{4})\s*UTC/i', $text, $m) ? $m[1].' '.$m[2].'UTC' : null;
+}
+function cimss_winds(string $text): array {
+    return preg_match('/(?:\d{1,2}[A-Za-z]{3}\d{4}\s+\d{4}\s*UTC\s+)?(\d{1,3})\s*kts?\s+(\d{3,4}(?:\.\d+)?)\s*hPa/i', $text, $m) ? ['vmax'=>$m[1].' kt','mslp'=>$m[2].' hPa'] : ['vmax'=>null,'mslp'=>null];
+}
+function cimss_basin_directory(string $id): string {
+    return ['L'=>'atlantic','E'=>'eastpac','C'=>'eastpac','W'=>'westpac','A'=>'northindian','B'=>'northindian','S'=>'southindian','P'=>'australia'][strtoupper(substr($id,-1))] ?? 'westpac';
+}
+function parse_cimss_summary(string $body, array $storm, string $source): array {
+    $text=cimss_text($body); $id=$storm['id']; $year=$storm['year'];
+    if (!preg_match('/Tropical Cyclone\s+'.preg_quote($id,'/').'\b/i', $text)) return [];
+    preg_match('/Tropical Cyclone\s+\d{2}[A-Z]\s*\(([^)]+)\)/i', $text, $name);
+    $sourceFor=[
+        'ADT'=>CIMSS_BASE.'/real-time/adt/odt'.$id.'.html', 'AIDT'=>CIMSS_BASE.'/real-time/adt/AiDT/'.$id.'.AiDT.V2.html',
+        'DPRINT'=>CIMSS_BASE.'/real-time/DPRINT/'.$year.'/'.$year.'_'.$id.'_history_IR.html', 'DMINT'=>CIMSS_BASE.'/real-time/DMINT/'.$year.'/'.$year.'_'.$id.'_history_MWIR.html',
+        'MWSOUNDERS'=>CIMSS_BASE.'/real-time/atms/archive/'.$year.'/'.$year.$id.'.html', 'SATCON'=>CIMSS_BASE.'/real-time/satcon/'.$year.$id.'.html',
+        'AIRI'=>CIMSS_BASE.'/real-time/ai-ri/#'.rawurlencode($name[1] ?? $id), 'ARCHER'=>CIMSS_BASE.'/real-time/arch-all/cyclones/'.$year.'_'.$id.'/web/summaryTable.html',
+        'MPERC'=>CIMSS_BASE.'/real-time/arch-all/cyclones/'.$year.'_'.$id.'/web/summaryTableERC.html', 'SHEAR'=>CIMSS_BASE.'/real-time/'.cimss_basin_directory($id).'/storm/shear/shear.'.$id.'.txt'];
+    $products=[];
+    $adt=cimss_segment($text,'/\bADT\b/i',['/\bAiDT-V?2?\b/i','/\bDPRINT\b/i']);
+    if ($adt !== '') { $wind=cimss_winds($adt); preg_match('/Scene\s+CI#\s+FT#\s+AdjT#\s+RawT#\s+Eye T\s+Cloud T\s*\n?\s*(\S+)\s+(\d(?:\.\d+)?)\s+(\d(?:\.\d+)?)\s+(\d(?:\.\d+)?)\s+(\d(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?C)\s+(-?\d+(?:\.\d+)?C)/i',$adt,$m); $products[]=cimss_product('ADT','ADT v9.1',$sourceFor['ADT'],cimss_time($adt),[cimss_metric('Vmax',$wind['vmax']),cimss_metric('MSLP',$wind['mslp']),cimss_metric('Scene',$m[1]??null),cimss_metric('CI#',$m[2]??null),cimss_metric('Final T#',$m[3]??null),cimss_metric('Adj T#',$m[4]??null),cimss_metric('Raw T#',$m[5]??null),cimss_metric('Eye T',$m[6]??null),cimss_metric('Cloud T',$m[7]??null)],'Automated infrared Advanced Dvorak Technique'); }
+    $aidt=cimss_segment($text,'/\bAiDT-V?2?\b/i',['/\bDPRINT\b/i','/\bDMINT\b/i']);
+    if ($aidt !== '') { preg_match('/(\d{1,3})\s*kts?/i',$aidt,$m); $products[]=cimss_product('AIDT','AiDT v2',$sourceFor['AIDT'],cimss_time($aidt),[cimss_metric('Vmax',isset($m[1])?$m[1].' kt':null)],'AI-enhanced ADT wind estimate'); }
+    $dprint=cimss_segment($text,'/\bDPRINT\b/i',['/\bDMINT\b/i','/\bMW Sounders\b/i']);
+    if ($dprint !== '') { $wind=cimss_winds($dprint); preg_match('/Vmax\s*25%\s+Vmax\s*75%\s*\n?\s*(\d{1,3})\s*kts?\s+(\d{1,3})\s*kts?/i',$dprint,$m); $products[]=cimss_product('DPRINT','D-PRINT',$sourceFor['DPRINT'],cimss_time($dprint),[cimss_metric('Vmax',$wind['vmax']),cimss_metric('MSLP',$wind['mslp']),cimss_metric('25th percentile',isset($m[1])?$m[1].' kt':null),cimss_metric('75th percentile',isset($m[2])?$m[2].' kt':null)],'Deep-learning infrared intensity estimate'); }
+    $dmint=cimss_segment($text,'/\bDMINT\b/i',['/\bMW Sounders\b/i','/\bSATCON\b/i']);
+    if ($dmint !== '') { $wind=cimss_winds($dmint); preg_match('/Vmax\s*25%\s+Vmax\s*75%\s+MW Instr\.\s*\n?\s*(\d{1,3})\s*kts?\s+(\d{1,3})\s*kts?\s+([A-Z0-9-]+)/i',$dmint,$m); $products[]=cimss_product('DMINT','D-MINT',$sourceFor['DMINT'],cimss_time($dmint),[cimss_metric('Vmax',$wind['vmax']),cimss_metric('MSLP',$wind['mslp']),cimss_metric('25th percentile',isset($m[1])?$m[1].' kt':null),cimss_metric('75th percentile',isset($m[2])?$m[2].' kt':null),cimss_metric('MW instrument',$m[3]??null)],'Deep multi-sensor infrared/microwave intensity estimate'); }
+    $sounders=cimss_segment($text,'/\bMW Sounders\b/i',['/\bSATCON\b/i','/\bRI Forecast\b/i']);
+    if ($sounders !== '') { $wind=cimss_winds($sounders); preg_match('/Satellite\s+FOV\s*\n?\s*(?:\S+\s+)?(\d+)\s+(\d+)/i',$sounders,$m); $products[]=cimss_product('MWSOUNDERS','Microwave Sounders',$sourceFor['MWSOUNDERS'],cimss_time($sounders),[cimss_metric('Vmax',$wind['vmax']),cimss_metric('MSLP',$wind['mslp']),cimss_metric('Satellite',$m[1]??null),cimss_metric('FOV',$m[2]??null)],'CIMSS microwave-sounding intensity estimate'); }
+    $satcon=cimss_segment($text,'/\bSATCON\b/i',['/\bRI Forecast\b/i','/\bPosition Estimates\b/i']);
+    if ($satcon !== '') { $wind=cimss_winds($satcon); preg_match('/Consensus Members\s*\n?\s*([^\n]+)/i',$satcon,$m); $products[]=cimss_product('SATCON','SATCON',$sourceFor['SATCON'],cimss_time($satcon),[cimss_metric('Vmax',$wind['vmax']),cimss_metric('MSLP',$wind['mslp']),cimss_metric('Members',$m[1]??null)],'Satellite Consensus intensity estimate'); }
+    $airi=cimss_segment($text,'/\bAI-RI\b/i',['/\bPosition Estimates\b/i','/\bTC Structure\b/i']);
+    if ($airi !== '') { preg_match('/(\d{1,3})\s*kts?\s+(\d{1,3})\s*kts?/i',$airi,$m); $metrics=[cimss_metric('Current Vmax',isset($m[1])?$m[1].' kt':null),cimss_metric('Current MPI',isset($m[2])?$m[2].' kt':null)]; preg_match_all('/(\d+kt\/\d+h)\s+([\d.]+%)/i',$airi,$prob,PREG_SET_ORDER); foreach ($prob as $item) $metrics[]=cimss_metric($item[1],$item[2]); $products[]=cimss_product('AIRI','AI-RI',$sourceFor['AIRI'],cimss_time($airi),$metrics,'AI rapid-intensification guidance'); }
+    $archer=cimss_segment($text,'/\bARCHER\b/i',['/\bTC Structure\b/i','/\bM-PERC\b/i']);
+    if ($archer !== '') { preg_match('/(\d{1,2}(?:\.\d+)?[NS])\s+(\d{1,3}(?:\.\d+)?[EW])/i',$archer,$loc); preg_match('/Satellite\s+Sensor\s+Eye Diameter\s+Eye Cert\s*%\s*\n?\s*(\S+)\s+(\S+)\s+([\d.]+\s*deg)\s+([\d.]+%)/i',$archer,$m); $products[]=cimss_product('ARCHER','ARCHER',$sourceFor['ARCHER'],cimss_time($archer),[cimss_metric('Latitude',$loc[1]??null),cimss_metric('Longitude',$loc[2]??null),cimss_metric('Satellite',$m[1]??null),cimss_metric('Sensor',$m[2]??null),cimss_metric('Eye diameter',$m[3]??null),cimss_metric('Eye certainty',$m[4]??null)],'Automated microwave/IR center-position retrieval'); }
+    $mperc=cimss_segment($text,'/\b(?:MPERC|M-PERC)\b/i',['/\bMIMIC-TPW\b/i','/\bShear Analysis\b/i']);
+    if ($mperc !== '') { preg_match('/(\d+(?:\.\d+)?%)\s+(\d+(?:\.\d+)?%)/',$mperc,$m); $products[]=cimss_product('MPERC','M-PERC',$sourceFor['MPERC'],cimss_time($mperc),[cimss_metric('ERC onset (full)',$m[1]??null),cimss_metric('ERC onset (V-based)',$m[2]??null)],'Microwave probability of eyewall-replacement-cycle onset'); }
+    $shear=cimss_segment($text,'/\bShear Analysis\b/i',['/\bTC-Scale AMVs\b/i']);
+    if ($shear !== '') { preg_match('/(\d+(?:\.\d+)?)\s*kts?\s+(\d+(?:\.\d+)?)\s*deg/i',$shear,$m); $products[]=cimss_product('SHEAR','Vertical Shear',$sourceFor['SHEAR'],cimss_time($shear),[cimss_metric('Magnitude',isset($m[1])?$m[1].' kt':null),cimss_metric('Direction',isset($m[2])?$m[2].'°':null)],'CIMSS AMV-aided deep-layer vertical wind shear'); }
+    return $products;
+}
+function merge_cimss_metrics(array &$products, string $id, array $metrics): void {
+    foreach ($products as &$product) if ($product['id'] === $id) foreach (array_filter($metrics) as $metric) { $found=false; foreach ($product['metrics'] as $existing) if ($existing['label'] === $metric['label']) {$found=true; break;} if (!$found) $product['metrics'][]=$metric; }
+}
+function parse_cimss_adt_detail(string $body): array {
+    $text=cimss_text($body); preg_match('/Lat\s*:\s*([\d:]+\s*[NS])\s+Lon\s*:\s*([\d:]+\s*[EW])/i',$text,$pos); preg_match('/CI#\s*\/Pressure\/ Vmax\s*\n?\s*(\d(?:\.\d+)?)\s*\/\s*([\d.]+)mb\s*\/\s*([\d.]+)kt/i',$text,$ci); preg_match('/Final T#\s+Adj T#\s+Raw T#\s*\n?\s*(\d(?:\.\d+)?)\s+(\d(?:\.\d+)?)\s+(\d(?:\.\d+)?)/i',$text,$t); preg_match('/Scene Type\s*:\s*([^\n]+)/i',$text,$scene); preg_match('/Satellite Name\s*:\s*([^\n]+)/i',$text,$sat); $out=[cimss_metric('Latitude',$pos[1]??null),cimss_metric('Longitude',$pos[2]??null),cimss_metric('CI#',$ci[1]??null),cimss_metric('MSLP',isset($ci[2])?$ci[2].' hPa':null),cimss_metric('Vmax',isset($ci[3])?$ci[3].' kt':null),cimss_metric('Final T#',$t[1]??null),cimss_metric('Adj T#',$t[2]??null),cimss_metric('Raw T#',$t[3]??null),cimss_metric('Scene detail',$scene[1]??null),cimss_metric('Satellite',$sat[1]??null)]; preg_match_all('/(?:NE|SE|SW|NW)\s*\n?\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)/i',$text,$radii,PREG_SET_ORDER); foreach ($radii as $i=>$row) $out[]=cimss_metric((['NE','SE','SW','NW'][$i] ?? 'Quadrant').' R34/R50/R64',$row[1].'/'.$row[2].'/'.$row[3].' nm'); return $out;
+}
+function parse_cimss_satcon_detail(string $body): array {
+    $text=cimss_text($body); preg_match('/SATCON:\s*MSLP\s*=\s*([\d.]+)\s*hPa\s+MSW\s*=\s*([\d.]+)\s*knots/i',$text,$current); preg_match('/SATCON Member Consensus:\s*([\d.]+)\s*knots/i',$text,$consensus); preg_match('/Pressure\s*->\s*Wind Using SATCON MSLP:\s*([\d.]+)\s*knots/i',$text,$pressure); preg_match('/Distance to Outer Closed Isobar Used is\s*([\d.]+)\s*nm/i',$text,$outer); preg_match('/Eye Size Correction Used is\s*([\d.]+)\s*knots/i',$text,$eye); $out=[cimss_metric('MSLP',isset($current[1])?$current[1].' hPa':null),cimss_metric('Vmax',isset($current[2])?$current[2].' kt':null),cimss_metric('Member consensus',isset($consensus[1])?$consensus[1].' kt':null),cimss_metric('Pressure-wind',isset($pressure[1])?$pressure[1].' kt':null),cimss_metric('Outer closed isobar',isset($outer[1])?$outer[1].' nm':null),cimss_metric('Eye-size correction',isset($eye[1])?$eye[1].' kt':null)]; preg_match_all('/(?:ADT|CIMSS AMSU|ATMS|SSMIS|CIRA ATMS):\s*[\d.]+?\s*hPa\s*[\d.]+?\s*knots[^\n]*/i',$text,$members); foreach ($members[0] as $member) {$parts=explode(':',$member,2);$out[]=cimss_metric('Member '.trim($parts[0]),trim((string)preg_replace('/\s+/',' ',$member)));} return $out;
+}
+function cimss_products(array $ref): array {
+    $storm=cimss_reference($ref); if (!$storm) return ['status'=>'not_available','message'=>'No CIMSS-compatible tropical-cyclone identifier can be formed for this storm.','source'=>CIMSS_BASE,'products'=>[]];
+    $summary=CIMSS_BASE.'/real-time/summary/summary.'.$storm['id'].'_'.$storm['year'].'.html'; $result=fetch_text($summary,16);
+    if ($result['status'] !== 200 || $result['error'] !== '') return ['status'=>'source_unavailable','message'=>'The UW-CIMSS product summary could not be reached right now.','source'=>$summary,'storm_id'=>$storm['id'],'products'=>[]];
+    $products=parse_cimss_summary($result['text'],$storm,$summary); if (!$products) return ['status'=>'not_published','message'=>'CIMSS has no active product summary for this storm.','source'=>$summary,'storm_id'=>$storm['id'],'products'=>[]];
+    $details=fetch_many(['adt'=>CIMSS_BASE.'/real-time/adt/odt'.$storm['id'].'.html','satcon'=>CIMSS_BASE.'/real-time/satcon/'.$storm['year'].$storm['id'].'.html'],16);
+    $adt=$details['adt'] ?? ['status'=>0,'text'=>'']; if ($adt['status']===200) merge_cimss_metrics($products,'ADT',parse_cimss_adt_detail($adt['text']));
+    $satcon=$details['satcon'] ?? ['status'=>0,'text'=>'']; if ($satcon['status']===200) merge_cimss_metrics($products,'SATCON',parse_cimss_satcon_detail($satcon['text']));
+    return ['status'=>'ok','message'=>'','source'=>$summary,'storm_id'=>$storm['id'],'fetched_at'=>gmdate('c'),'products'=>$products];
+}
+
 function cache_path(array $ref, string $prefix): string { return rtrim(sys_get_temp_dir(),DIRECTORY_SEPARATOR).DIRECTORY_SEPARATOR.$prefix.hash('sha256',$ref['storm_id'].'|'.$ref['product'].'|'.$ref['storm_name']).'.json'; }
 function last_good(array $ref): ?array { $path=cache_path($ref,'sat-agency-last-'); if (!is_file($path)) return null; $raw=json_decode((string)@file_get_contents($path),true); return is_array($raw)&&is_array($raw['payload']??null)&&time()-(int)($raw['saved_at']??0)<=DVORAK_LAST_GOOD_SECONDS?$raw:null; }
 function save_good(array $ref,array $payload): void { @file_put_contents(cache_path($ref,'sat-agency-last-'),json_encode(['saved_at'=>time(),'payload'=>$payload],JSON_UNESCAPED_SLASHES),LOCK_EX); }
@@ -335,9 +428,10 @@ function load_live(array $ref): array {
     if ($pgtw) {$fixes[]=$pgtw; $statuses[]=status_for('PGTW','ok','',$pgtw['source']);}
     else $statuses[]=status_for('PGTW',$ref['product']!==''?'not_published':'outside_responsibility',$ref['product']!==''?'The current JTWC reasoning has no PGTW subjective Dvorak value.':'JTWC has no prognostic-reasoning product for this basin.');
     $independent=independent_fixes($ref); $fixes=array_merge($fixes,$independent['fixes']); $statuses=array_merge($statuses,$independent['statuses']);
-    if ($fixes) { $payload=success($ref,$fixes,$statuses,$attempts); save_good($ref,$payload); return $payload; }
-    $old=last_good($ref); if ($old) { $payload=$old['payload']; $payload['freshness']='last_published';$payload['stale']=true;$payload['agency_statuses']=$statuses;$payload['attempts']=$attempts;$payload['message']='Live agency sources are unreachable right now. Showing last agency-published values; no value is estimated.';return $payload; }
-    return unavailable($ref,basin($ref)!==''?'No matching independent agency analysis is published for this storm right now. Values are never copied from JTWC into another agency card.':'No tropical-cyclone basin can be matched to this storm yet.','not_available',$attempts,$statuses);
+    $cimss=cimss_products($ref);
+    if ($fixes) { $payload=success($ref,$fixes,$statuses,$attempts); $payload['cimss']=$cimss; save_good($ref,$payload); return $payload; }
+    $old=last_good($ref); if ($old) { $payload=$old['payload']; $payload['freshness']='last_published';$payload['stale']=true;$payload['agency_statuses']=$statuses;$payload['attempts']=$attempts;$payload['cimss']=$cimss;$payload['message']='Live agency sources are unreachable right now. Showing last agency-published values; no value is estimated.';return $payload; }
+    $payload=unavailable($ref,basin($ref)!==''?'No matching independent agency analysis is published for this storm right now. Values are never copied from JTWC into another agency card.':'No tropical-cyclone basin can be matched to this storm yet.','not_available',$attempts,$statuses); $payload['cimss']=$cimss; return $payload;
 }
 
 $ref=reference();

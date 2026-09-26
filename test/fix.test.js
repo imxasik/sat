@@ -150,3 +150,58 @@ test('agency catalog records separate official publishers rather than a single J
     assert.match(byId.CMA.source_url, /typhoon\.nmc\.cn/);
     assert.notEqual(byId.DEMS.source_url, byId.PGTW.source_url);
 });
+
+test('collects CIMSS objective ADT, AiDT, SATCON, ARCHER and structure fields separately', () => {
+    const { parseCimssSummary, parseStormReference, cimssStormReference } = require('../fix.js');
+    const reference = parseStormReference(new URLSearchParams('storm_id=wp252026&storm_name=Surigae&basin=WP'));
+    assert.deepEqual(cimssStormReference(reference), { id: '25W', year: '2026' });
+    const products = parseCimssSummary(`
+        Tropical Cyclone 25W (Surigae) Latest Real-Time CIMSS Product Summary
+        Current Intensity Estimates ADT
+        Date Time Vmax MSLP
+        26Sep2026 1210UTC 51 kts 993 hPa
+        Scene CI# FT# AdjT# RawT# Eye T Cloud T
+        CRVBND 3.3 3.3 3.6 3.6 -2.96C -65.09C
+        AiDT-V2 Date Time Vmax 26Sep2026 1210UTC 55 kts
+        DPRINT Date Time Vmax MSLP 26Sep2026 1210UTC 69 kts 978 hPa
+        Vmax 25% Vmax 75% 62 kts 76 kts
+        SATCON Date Time Vmax MSLP 26Sep2026 1020UTC 56 kts 990 hPa
+        Consensus Members 2 (ADT+Sounders)
+        RI Forecast AI-RI Date Time Current Vmax Current MPI 26Sep2026 0600UTC 70 kts 132 kts
+        20kt/12h 32.9% 25kt/24h 49.1%
+        Position Estimates ARCHER Date Time Latitude Longitude 26Sep2026 0839UTC 23.12N 126.96E
+        Satellite Sensor Eye Diameter Eye Cert % SSMIS-17 89-92GHz 0.60 deg 97.3%
+        TC Structure MPERC Date Time Prob. ERC onset Full Model Prob. ERC onset V-based 26Sep2026 0800UTC 0% 5%
+        Shear Analysis Date Time Shear Magnitude Shear Direction 26Sep2026 1200UTC 2 kts 86 deg
+    `, { id: '25W', year: '2026' }, 'https://tropic.ssec.wisc.edu/real-time/summary/summary.25W_2026.html');
+    const byId = Object.fromEntries(products.map(product => [product.id, product]));
+    assert.deepEqual(byId.ADT.metrics.filter(item => ['Vmax', 'Final T#', 'Raw T#'].includes(item.label)).map(item => item.value), ['51 kt', '3.3', '3.6']);
+    assert.equal(byId.AIDT.metrics.find(item => item.label === 'Vmax').value, '55 kt');
+    assert.equal(byId.SATCON.metrics.find(item => item.label === 'Members').value, '2 (ADT+Sounders)');
+    assert.equal(byId.ARCHER.metrics.find(item => item.label === 'Eye certainty').value, '97.3%');
+    assert.equal(byId.SHEAR.metrics.find(item => item.label === 'Magnitude').value, '2 kt');
+});
+
+test('enriches CIMSS ADT and SATCON cards only with published detail fields', () => {
+    const { parseCimssAdtDetail, parseCimssSatconDetail } = require('../fix.js');
+    const adt = parseCimssAdtDetail(`Lat: 23:07N Lon: 126:58E
+CI# /Pressure/ Vmax
+3.5 / 990mb / 55kt
+Final T# Adj T# Raw T#
+3.5 3.7 3.6
+Scene Type: CURVED BAND
+Satellite Name: HIMAWARI-9
+NE 80 50 20
+SE 70 40 10`);
+    assert.equal(adt.find(item => item.label === 'Vmax').value, '55 kt');
+    assert.equal(adt.find(item => item.label === 'NE R34/R50/R64').value, '80/50/20 nm');
+    const satcon = parseCimssSatconDetail(`SATCON: MSLP = 990 hPa MSW = 56 knots
+SATCON Member Consensus: 55 knots
+Pressure -> Wind Using SATCON MSLP: 57 knots
+Distance to Outer Closed Isobar Used is 120 nm
+Eye Size Correction Used is 3 knots
+ADT: 992 hPa 52 knots
+CIMSS AMSU: 989 hPa 58 knots`);
+    assert.equal(satcon.find(item => item.label === 'Member consensus').value, '55 kt');
+    assert.equal(satcon.find(item => item.label === 'Member ADT').value, 'ADT: 992 hPa 52 knots');
+});
