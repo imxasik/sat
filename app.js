@@ -9,6 +9,28 @@
 
     // === Configuration ===
     const API_BASE = 'https://science.nrlmry.navy.mil/geoips/prod_api/tcweb4';
+    // Same-origin endpoint. In PHP hosting this is fix.php; the local Node
+    // server mirrors the same route so the feature can be previewed locally.
+    const DVORAK_ENDPOINT = 'fix.php';
+    // The panel lists the requested operational centres for every storm.
+    // A number is shown only if it appears in the current official source.
+    const DVORAK_AGENCY_CATALOG = [
+        { id: 'PGTW', label: 'JTWC' },
+        { id: 'DEMS', label: 'DEMS' },
+        { id: 'RJTD', label: 'Japan Meteorological Agency' },
+        { id: 'KNES', label: 'NOAA Satellite Analysis Branch' },
+        { id: 'NHC', label: 'U.S. National Hurricane Center' },
+        { id: 'PAGASA', label: 'Philippines' },
+        { id: 'RCTP', label: 'Taiwan CWA' },
+        { id: 'CMA', label: 'China Meteorological Administration' },
+        { id: 'KMA', label: 'Korea Meteorological Administration' },
+        { id: 'MFR', label: 'Météo-France La Réunion' },
+        { id: 'BOM', label: 'Australian Bureau of Meteorology' }
+    ];
+    const COMMON_DVORAK_AGENCIES = DVORAK_AGENCY_CATALOG.map(agency => agency.id);
+    const DVORAK_AGENCY_INFO = Object.fromEntries(
+        DVORAK_AGENCY_CATALOG.map(agency => [agency.id, agency.label])
+    );
     
     // === Cache Busting for API Calls ===
     const BUILD_TIMESTAMP = Date.now();
@@ -48,6 +70,8 @@
         modalIndex: 0,
         loadedImages: new Set(),
         lastUpdated: null,
+        dvorakRequestId: 0,
+        dvorakLoading: false,
         // Track latest update time per platform/sensor/product
         freshness: {
             platforms: {},  // { platformName: timestamp }
@@ -147,7 +171,12 @@
             modalOverlay: $('imageModal'),
             modalImage: $('modalImage'),
             modalInfo: $('modalInfo'),
-            stormCount: $('stormCount')
+            stormCount: $('stormCount'),
+            dvorakPanel: $('dvorakPanel'),
+            dvorakStatus: $('dvorakStatus'),
+            dvorakGrid: $('dvorakGrid'),
+            dvorakMeta: $('dvorakMeta'),
+            dvorakRefresh: $('dvorakRefresh')
         };
     }
 
@@ -668,6 +697,179 @@ function updateStormBanner(storm) {
     }
 
     // =====================================================
+    // Agency Dvorak Fixes — sourced from JTWC reasoning
+    // =====================================================
+    function getDvorakStormParams(storm) {
+        const p = storm?.properties || {};
+        return new URLSearchParams({
+            storm_id: p.storm_id || '',
+            storm_name: p.storm_name || '',
+            basin: p.sub_basin || ''
+        });
+    }
+
+    function setDvorakLoading(isLoading) {
+        state.dvorakLoading = isLoading;
+        if (DOM.dvorakRefresh) {
+            DOM.dvorakRefresh.disabled = isLoading || !state.activeStormData;
+            DOM.dvorakRefresh.classList.toggle('is-loading', isLoading);
+        }
+    }
+
+    function showDvorakLoading(storm) {
+        if (!DOM.dvorakGrid) return;
+        const displayName = getStormDisplayName(storm);
+        DOM.dvorakPanel?.classList.remove('has-error');
+        DOM.dvorakPanel?.classList.add('is-loading');
+        DOM.dvorakStatus.textContent = `Loading the latest official agency fixes for ${displayName}…`;
+        DOM.dvorakGrid.className = 'dvorak-fix-grid is-loading';
+        DOM.dvorakGrid.innerHTML = Array.from({ length: 4 }, () => `
+            <div class="dvorak-card dvorak-card-skeleton" aria-hidden="true">
+                <span></span><strong></strong><i></i>
+            </div>`).join('');
+        if (DOM.dvorakMeta) {
+            DOM.dvorakMeta.innerHTML = '<span class="dvorak-source-note">Checking the current JTWC prognostic reasoning…</span>';
+        }
+    }
+
+    function formatDvorakFetched(value) {
+        const ts = parseDateUTC(value);
+        if (!ts) return '';
+        return new Date(ts).toLocaleString('en-US', {
+            month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+            hour12: false, timeZone: 'UTC'
+        }) + ' UTC';
+    }
+
+    function getDvorakAgencyLabel(agency, agencyInfo = DVORAK_AGENCY_INFO) {
+        return agencyInfo[agency] || DVORAK_AGENCY_INFO[agency] || agency;
+    }
+
+    function getDvorakAgencyCatalog(data) {
+        if (!Array.isArray(data?.agency_catalog) || !data.agency_catalog.length) {
+            return DVORAK_AGENCY_CATALOG;
+        }
+        const catalog = data.agency_catalog
+            .filter(item => item && /^[A-Z0-9-]{2,18}$/.test(String(item.id || '').toUpperCase()))
+            .map(item => ({
+                id: String(item.id).toUpperCase(),
+                label: String(item.label || item.id).slice(0, 80)
+            }));
+        return catalog.length ? catalog : DVORAK_AGENCY_CATALOG;
+    }
+
+    function createDvorakCard(agency, fix, agencyInfo) {
+        const hasFix = Boolean(fix && (fix.t_number || Number.isFinite(fix.knots)));
+        const tNumber = hasFix && fix.t_number ? esc(fix.t_number) : '—';
+        const wind = hasFix && Number.isFinite(fix.knots)
+            ? `${fix.knots} <small>kt</small>`
+            : 'Not reported';
+        const time = hasFix && fix.time ? `Valid ${esc(fix.time)}` :
+            hasFix ? 'Latest JTWC table' : 'Not listed in latest table';
+        const title = hasFix && fix.raw ? ` title="${esc(fix.raw)}"` : '';
+        return `
+            <article class="dvorak-card${hasFix ? '' : ' is-unavailable'}"${title}>
+                <div class="dvorak-card-top">
+                    <span class="dvorak-agency-code">${esc(agency)}</span>
+                    <span class="dvorak-agency-name">${esc(getDvorakAgencyLabel(agency, agencyInfo))}</span>
+                </div>
+                <div class="dvorak-values">
+                    <strong class="dvorak-t-number">${tNumber}</strong>
+                    <span class="dvorak-wind">${wind}</span>
+                </div>
+                <span class="dvorak-card-time">${time}</span>
+            </article>`;
+    }
+
+    function renderDvorakUnavailable(data, storm) {
+        if (!DOM.dvorakGrid) return;
+        const displayName = getStormDisplayName(storm);
+        DOM.dvorakPanel?.classList.remove('is-loading');
+        DOM.dvorakPanel?.classList.add('has-error');
+        DOM.dvorakStatus.textContent = `No live agency table is available for ${displayName} right now.`;
+        DOM.dvorakGrid.className = 'dvorak-fix-grid is-unavailable';
+        DOM.dvorakGrid.innerHTML = `
+            <div class="dvorak-empty dvorak-empty-warning">
+                <span class="dvorak-empty-icon">!</span>
+                <div>
+                    <strong>Official fixes not published</strong>
+                    <span>${esc(data?.message || 'The latest official Dvorak table is not available yet.')}</span>
+                </div>
+            </div>`;
+        if (DOM.dvorakMeta) {
+            DOM.dvorakMeta.innerHTML = '<span class="dvorak-source-note">No values are estimated, substituted, or carried over from an older advisory.</span>';
+        }
+    }
+
+    function renderDvorakFixes(data, storm) {
+        if (!DOM.dvorakGrid) return;
+        if (!data || data.status !== 'ok') {
+            renderDvorakUnavailable(data, storm);
+            return;
+        }
+
+        const fixes = Array.isArray(data.agencies) ? data.agencies : [];
+        const byAgency = new Map(fixes
+            .filter(fix => fix && fix.agency)
+            .map(fix => [String(fix.agency).toUpperCase(), fix]));
+        const agencyCatalog = getDvorakAgencyCatalog(data);
+        const agencyInfo = Object.fromEntries(agencyCatalog.map(item => [item.id, item.label]));
+        const listedAgencies = agencyCatalog.map(item => item.id);
+        const agencyOrder = [...listedAgencies, ...fixes.map(fix => String(fix.agency || '').toUpperCase())
+            .filter(agency => agency && !listedAgencies.includes(agency))];
+
+        DOM.dvorakPanel?.classList.remove('is-loading', 'has-error');
+        DOM.dvorakStatus.textContent = `${getStormDisplayName(storm)} • Latest subjective agency intensity estimates`;
+        DOM.dvorakGrid.className = 'dvorak-fix-grid';
+        DOM.dvorakGrid.innerHTML = agencyOrder.map(agency => createDvorakCard(agency, byAgency.get(agency), agencyInfo)).join('');
+
+        const product = data.product_id ? `Product ${esc(data.product_id)}` : 'Current JTWC product';
+        const issued = data.issued ? `issued ${esc(data.issued)}` : '';
+        const fetched = formatDvorakFetched(data.fetched_at);
+        const automatedCount = Array.isArray(data.automated) ? data.automated.length : 0;
+        const sourceLink = typeof data.source === 'string' && /^https:\/\/www\.metoc(?:\.dc3n)?\.navy\.mil\//.test(data.source)
+            ? `<a href="${esc(data.source)}" target="_blank" rel="noopener">View official reasoning ↗</a>`
+            : '';
+        if (DOM.dvorakMeta) {
+            DOM.dvorakMeta.innerHTML = `
+                <span class="dvorak-source-note">JTWC prognostic reasoning · ${product}${issued ? ` · ${issued}` : ''}${fetched ? ` · fetched ${esc(fetched)}` : ''}${automatedCount ? ` · ${automatedCount} automated estimate${automatedCount === 1 ? '' : 's'} also available` : ''}</span>
+                ${sourceLink}`;
+        }
+    }
+
+    async function loadDvorakFixes(storm, forceRefresh = false) {
+        if (!storm || !DOM.dvorakGrid) return;
+        const requestId = ++state.dvorakRequestId;
+        const params = getDvorakStormParams(storm);
+        if (forceRefresh) params.set('refresh', '1');
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 18000);
+        setDvorakLoading(true);
+        showDvorakLoading(storm);
+
+        try {
+            const response = await fetch(`${DVORAK_ENDPOINT}?${params.toString()}`, {
+                headers: { 'Accept': 'application/json' },
+                cache: 'no-store',
+                signal: controller.signal
+            });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const data = await response.json();
+            if (requestId !== state.dvorakRequestId || state.activeStorm !== storm.properties.storm_id) return;
+            renderDvorakFixes(data, storm);
+        } catch (error) {
+            if (requestId !== state.dvorakRequestId) return;
+            console.warn('Unable to load live Dvorak fixes:', error);
+            renderDvorakUnavailable({
+                message: 'The live JTWC source connection failed. Use Refresh to try again; no estimated values are shown.'
+            }, storm);
+        } finally {
+            clearTimeout(timeout);
+            if (requestId === state.dvorakRequestId) setDvorakLoading(false);
+        }
+    }
+
+    // =====================================================
     // Modal
     // =====================================================
     function openModal(index) {
@@ -710,6 +912,7 @@ function updateStormBanner(storm) {
         });
 
         updateStormBanner(storm);
+        loadDvorakFixes(storm);
 
         // Reset filters
         state.selectedPlatforms = [];
@@ -858,6 +1061,9 @@ function updateStormBanner(storm) {
         DOM.viewGridBtn?.addEventListener('click', () => setViewMode('grid'));
         DOM.viewListBtn?.addEventListener('click', () => setViewMode('list'));
         DOM.loadMoreBtn?.addEventListener('click', () => loadProducts(true));
+        DOM.dvorakRefresh?.addEventListener('click', () => {
+            if (state.activeStormData && !state.dvorakLoading) loadDvorakFixes(state.activeStormData, true);
+        });
 
         $('modalClose')?.addEventListener('click', closeModal);
         $('modalPrev')?.addEventListener('click', () => navModal(-1));
