@@ -14,6 +14,7 @@ Professional microwave satellite imagery viewer for tropical cyclones and active
 - 🔍 **Image Lightbox** — Full-screen image viewer with keyboard/touch navigation
 - 🌙 **Dark Theme** — Professional dark interface designed for satellite imagery
 - 📡 **Microwave Focus** — Highlights microwave sensors and products
+- 🛟 **Resilient Fix Delivery** — every official JTWC host (HTTPS + HTTP), then read-only public mirrors of the same file, then the last officially published table; NHC-basin storms fall back to the official NHC forecast discussion
 - 📈 **Live Agency Dvorak Fixes** — Storm-specific subjective fixes from the latest official JTWC reasoning, with cards for JTWC/PGTW, DEMS, JMA/RJTD, NOAA SAB/KNES, NHC, PAGASA, Taiwan CWA/RCTP, CMA, KMA, Météo-France, and Australia BoM; every additional agency listed in a product appears automatically
 
 ## 📁 Files
@@ -36,7 +37,15 @@ Upload all files to a PHP-enabled server. `fix.php` is a same-origin, read-only 
 
 - Satellite imagery continues to use the direct NRL API.
 - `api.php` remains available as a fallback proxy for imagery hosts that need it.
-- The Dvorak panel never invents, estimates, or carries forward an agency fix. If JTWC does not publish a matching current table, it says so clearly.
+- The Dvorak panel never invents or estimates an agency fix. Values are always the officially published ones.
+- **Source failover order** (all in `fix.php` / `fix.js`):
+  1. `https://www.metoc.navy.mil/jtwc/products/<product>` and `https://www.metoc.dc3n.navy.mil/...`
+  2. the same URLs over HTTP (some shared hosts have a broken CA bundle for the Navy chain)
+  3. read-only public text mirrors of that exact official file (`r.jina.ai`, `allorigins`, `codetabs`, `thingproxy`) — used only when every official host is blocked, which is the usual cause of an empty panel on non-US hosting
+  4. for AL/EP/CP storms, the official NHC `CurrentStorms.json` → forecast discussion, giving TAFB/SAB subjective Dvorak values
+  5. the last officially published table for that storm (kept 24 h), returned with `stale: true`, `freshness: "last_published"` and a clear on-screen warning
+- Mirror responses are sanitised and validated (`looksLikeJtwcProduct`) so proxy error pages can never be shown as data.
+- Every response includes an `attempts[]` array listing each source tried and why it failed, which makes hosting problems easy to diagnose.
 
 ### Option 2: Local preview / Node.js
 No package installation is needed:

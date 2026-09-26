@@ -819,7 +819,9 @@ function updateStormBanner(storm) {
             .filter(agency => agency && !listedAgencies.includes(agency))];
 
         DOM.dvorakPanel?.classList.remove('is-loading', 'has-error');
-        DOM.dvorakStatus.textContent = `${getStormDisplayName(storm)} • Latest subjective agency intensity estimates`;
+        DOM.dvorakStatus.textContent = data.stale
+            ? `${getStormDisplayName(storm)} • Last published agency estimates (live source unreachable)`
+            : `${getStormDisplayName(storm)} • Latest subjective agency intensity estimates`;
         DOM.dvorakGrid.className = 'dvorak-fix-grid';
         DOM.dvorakGrid.innerHTML = agencyOrder.map(agency => createDvorakCard(agency, byAgency.get(agency), agencyInfo)).join('');
 
@@ -827,23 +829,27 @@ function updateStormBanner(storm) {
         const issued = data.issued ? `issued ${esc(data.issued)}` : '';
         const fetched = formatDvorakFetched(data.fetched_at);
         const automatedCount = Array.isArray(data.automated) ? data.automated.length : 0;
-        const sourceLink = typeof data.source === 'string' && /^https:\/\/www\.metoc(?:\.dc3n)?\.navy\.mil\//.test(data.source)
+        const sourceLink = typeof data.source === 'string' && /^https:\/\/www\.(?:metoc(?:\.dc3n)?\.navy\.mil|nhc\.noaa\.gov)\//.test(data.source)
             ? `<a href="${esc(data.source)}" target="_blank" rel="noopener">View official reasoning ↗</a>`
+            : '';
+        const freshnessNote = data.stale
+            ? `<span class="dvorak-source-note dvorak-stale-note">⚠ ${esc(data.message || 'Last officially published table — live sources are unreachable right now.')}</span>`
             : '';
         if (DOM.dvorakMeta) {
             DOM.dvorakMeta.innerHTML = `
-                <span class="dvorak-source-note">JTWC prognostic reasoning · ${product}${issued ? ` · ${issued}` : ''}${fetched ? ` · fetched ${esc(fetched)}` : ''}${automatedCount ? ` · ${automatedCount} automated estimate${automatedCount === 1 ? '' : 's'} also available` : ''}</span>
+                ${freshnessNote}
+                <span class="dvorak-source-note">${data.source && data.source.includes('nhc.noaa.gov') ? 'NHC forecast discussion' : 'JTWC prognostic reasoning'} · ${product}${issued ? ` · ${issued}` : ''}${fetched ? ` · fetched ${esc(fetched)}` : ''}${automatedCount ? ` · ${automatedCount} automated estimate${automatedCount === 1 ? '' : 's'} also available` : ''}</span>
                 ${sourceLink}`;
         }
     }
 
-    async function loadDvorakFixes(storm, forceRefresh = false) {
+    async function loadDvorakFixes(storm, forceRefresh = false, attempt = 1) {
         if (!storm || !DOM.dvorakGrid) return;
         const requestId = ++state.dvorakRequestId;
         const params = getDvorakStormParams(storm);
         if (forceRefresh) params.set('refresh', '1');
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 18000);
+        const timeout = setTimeout(() => controller.abort(), 45000);
         setDvorakLoading(true);
         showDvorakLoading(storm);
 
@@ -860,8 +866,17 @@ function updateStormBanner(storm) {
         } catch (error) {
             if (requestId !== state.dvorakRequestId) return;
             console.warn('Unable to load live Dvorak fixes:', error);
+            // The endpoint already fails over across official hosts and mirrors,
+            // so a client-side error is usually a transient network blip.
+            if (attempt < 3) {
+                clearTimeout(timeout);
+                setTimeout(() => {
+                    if (requestId === state.dvorakRequestId) loadDvorakFixes(storm, forceRefresh, attempt + 1);
+                }, attempt * 2000);
+                return;
+            }
             renderDvorakUnavailable({
-                message: 'The live JTWC source connection failed. Use Refresh to try again; no estimated values are shown.'
+                message: 'Every official source and mirror failed from this device. Use Refresh to try again; no estimated values are shown.'
             }, storm);
         } finally {
             clearTimeout(timeout);
