@@ -14,8 +14,8 @@ Professional microwave satellite imagery viewer for tropical cyclones and active
 - 🔍 **Image Lightbox** — Full-screen image viewer with keyboard/touch navigation
 - 🌙 **Dark Theme** — Professional dark interface designed for satellite imagery
 - 📡 **Microwave Focus** — Highlights microwave sensors and products
-- 🛟 **Resilient Fix Delivery** — every official JTWC host (HTTPS + HTTP), then read-only public mirrors of the same file, then the last officially published table; NHC-basin storms fall back to the official NHC forecast discussion
-- 📈 **Live Agency Dvorak Fixes** — Storm-specific subjective fixes from the latest official JTWC reasoning, with cards for JTWC/PGTW, DEMS, JMA/RJTD, NOAA SAB/KNES, NHC, PAGASA, Taiwan CWA/RCTP, CMA, KMA, Météo-France, and Australia BoM; every additional agency listed in a product appears automatically
+- 🛟 **Resilient Official Delivery** — short-lived same-origin cache, agency-specific source status, and a clearly labelled last-published fallback
+- 📈 **Independent Agency Analyses** — every card reads only its own publisher: JTWC/PGTW reasoning, IMD/DEMS satellite-fix PDFs, JMA/TCAC Tokyo, NHC/TAFB, PAGASA, Taiwan CWA, CMA/NMC, KMA, Météo-France La Réunion, or Australia BoM. Dvorak values and operational analyses are clearly distinguished; one agency’s value is never copied into another card.
 
 ## 📁 Files
 
@@ -26,26 +26,20 @@ Professional microwave satellite imagery viewer for tropical cyclones and active
 | `app.js` | Application logic (fetches data directly from NRL API) |
 | `index.php` | PHP version of the main page (for PHP hosting) |
 | `api.php` | PHP proxy (optional, for hosts that block CORS) |
-| `fix.php` | Production JTWC Dvorak-fix endpoint; safely parses official storm reasoning |
-| `fix.js` | Zero-dependency local preview server with the same `/fix.php` endpoint |
+| `fix.php` | Production multi-agency analysis endpoint; reads each official publisher separately |
+| `fix.js` | Zero-dependency local preview server with the same multi-agency `/fix.php` endpoint |
 | `.htaccess` | Apache configuration (for shared hosting) |
 
 ## 🚀 Deployment
 
 ### Option 1: PHP Hosting — full live dashboard (recommended)
-Upload all files to a PHP-enabled server. `fix.php` is a same-origin, read-only JTWC endpoint that retrieves and parses the current official prognostic reasoning. It is required for the live **Agency Dvorak Fixes** panel, avoids browser CORS problems, accepts no arbitrary remote URLs, and caches a product for only four minutes. The panel's **Refresh** button bypasses that short cache.
+Upload all files to a PHP-enabled server. `fix.php` is a same-origin, read-only multi-agency endpoint that retrieves official publications and safely parses only the selected storm’s reported value. It accepts no arbitrary remote URLs and caches a live response for four minutes. The panel’s **Refresh** button bypasses that short cache.
 
-- Satellite imagery continues to use the direct NRL API.
-- `api.php` remains available as a fallback proxy for imagery hosts that need it.
-- The Dvorak panel never invents or estimates an agency fix. Values are always the officially published ones.
-- **Source failover order** (all in `fix.php` / `fix.js`):
-  1. `https://www.metoc.navy.mil/jtwc/products/<product>` and `https://www.metoc.dc3n.navy.mil/...`
-  2. the same URLs over HTTP (some shared hosts have a broken CA bundle for the Navy chain)
-  3. read-only public text mirrors of that exact official file (`r.jina.ai`, `allorigins`, `codetabs`, `thingproxy`) — used only when every official host is blocked, which is the usual cause of an empty panel on non-US hosting
-  4. for AL/EP/CP storms, the official NHC `CurrentStorms.json` → forecast discussion, giving TAFB/SAB subjective Dvorak values
-  5. the last officially published table for that storm (kept 24 h), returned with `stale: true`, `freshness: "last_published"` and a clear on-screen warning
-- Mirror responses are sanitised and validated (`looksLikeJtwcProduct`) so proxy error pages can never be shown as data.
-- Every response includes an `attempts[]` array listing each source tried and why it failed, which makes hosting problems easy to diagnose.
+- Each card has its **own official source link**. JTWC reasoning populates **only PGTW** — it cannot populate DEMS, JMA, CWA, CMA, KMA, PAGASA, etc.
+- IMD/DEMS satellite-fix PDFs are discovered from IMD’s official bulletin archive. A text renderer may be used only to read the official PDF; the displayed link is always the original IMD file.
+- Agencies that publish a Dvorak number show that number. Agencies whose public product publishes an operational wind/pressure analysis show the agency’s native unit instead; nothing is converted or estimated.
+- A card explicitly reports when the agency has no matching bulletin, is outside its responsibility area, or (as of September 2026) a publisher has discontinued a product. NOAA SAB/KNES manual Dvorak estimates are marked discontinued rather than being back-filled from another agency.
+- The last-published fallback is retained for 24 hours and visibly labelled. It never creates a value for an agency that did not publish one.
 
 ### Option 2: Local preview / Node.js
 No package installation is needed:
@@ -53,7 +47,7 @@ No package installation is needed:
 cd satellite-viewer
 node fix.js
 ```
-Open `http://localhost:4173`. The local server serves the site and mirrors the production `/fix.php` Dvorak endpoint.
+Open `http://localhost:4173`. The local server serves the site and mirrors the production `/fix.php` multi-agency endpoint.
 
 ### Option 3: Static-only hosting
 `index.html`, `style.css`, and `app.js` can still be deployed to static hosting for the NRL imagery viewer. Static-only hosts cannot run `fix.php`, so the Dvorak panel will show an explicit unavailable state rather than inaccurate data. Use PHP hosting or provide an equivalent same-origin endpoint for the complete live dashboard.

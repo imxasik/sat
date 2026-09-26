@@ -1881,3 +1881,35 @@ body {
 @media (max-width: 390px) {
     .dvorak-fix-grid { grid-template-columns: 1fr; }
 }
+
+/* Each estimate carries its publisher. Operational agency analyses can use
+   agency-native wind units rather than an inferred Dvorak conversion. */
+.dvorak-t-number.is-analysis {
+    color: #d8b4fe;
+    font-size: 1.05rem;
+    letter-spacing: -0.02em;
+    line-height: 1.12;
+}
+
+.dvorak-card-source {
+    display: block;
+    overflow: hidden;
+    margin-top: 7px;
+    color: var(--accent-cyan);
+    font-size: 0.61rem;
+    font-weight: 700;
+    line-height: 1.25;
+    text-decoration: none;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+a.dvorak-card-source:hover {
+    color: #a5f3fc;
+    text-decoration: underline;
+}
+
+.dvorak-card.is-unavailable .dvorak-card-source {
+    color: var(--text-muted);
+    font-weight: 600;
+}

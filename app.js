@@ -15,17 +15,17 @@
     // The panel lists the requested operational centres for every storm.
     // A number is shown only if it appears in the current official source.
     const DVORAK_AGENCY_CATALOG = [
-        { id: 'PGTW', label: 'JTWC' },
-        { id: 'DEMS', label: 'DEMS' },
-        { id: 'RJTD', label: 'Japan Meteorological Agency' },
-        { id: 'KNES', label: 'NOAA Satellite Analysis Branch' },
-        { id: 'NHC', label: 'U.S. National Hurricane Center' },
-        { id: 'PAGASA', label: 'Philippines' },
-        { id: 'RCTP', label: 'Taiwan CWA' },
-        { id: 'CMA', label: 'China Meteorological Administration' },
-        { id: 'KMA', label: 'Korea Meteorological Administration' },
-        { id: 'MFR', label: 'Météo-France La Réunion' },
-        { id: 'BOM', label: 'Australian Bureau of Meteorology' }
+        { id: 'PGTW', label: 'JTWC', source_label: 'JTWC prognostic reasoning', source_url: 'https://www.metoc.navy.mil/jtwc/jtwc.html', analysis_kind: 'dvorak' },
+        { id: 'DEMS', label: 'India Meteorological Department', source_label: 'IMD satellite / satellite-fix bulletin', source_url: 'https://rsmcnewdelhi.imd.gov.in/archive-information.php?internal_menu=MjI%3D&menu_id=Mg%3D%3D', analysis_kind: 'dvorak' },
+        { id: 'RJTD', label: 'Japan Meteorological Agency', source_label: 'JMA / TCAC Tokyo advisory', source_url: 'https://www.data.jma.go.jp/tca/data/index.html', analysis_kind: 'official_analysis' },
+        { id: 'KNES', label: 'NOAA Satellite Analysis Branch', source_label: 'NOAA OSPO tropical products', source_url: 'https://ospo.noaa.gov/products/ocean/tropical/tdpositions.html', analysis_kind: 'dvorak' },
+        { id: 'NHC', label: 'U.S. National Hurricane Center', source_label: 'NHC forecast discussion / TAFB analysis', source_url: 'https://www.nhc.noaa.gov/', analysis_kind: 'dvorak' },
+        { id: 'PAGASA', label: 'PAGASA', source_label: 'PAGASA tropical cyclone bulletin', source_url: 'https://www.pagasa.dost.gov.ph/tropical-cyclone/severe-weather-bulletin', analysis_kind: 'official_analysis' },
+        { id: 'RCTP', label: 'Taiwan CWA', source_label: 'CWA typhoon analysis and forecast', source_url: 'https://www.cwa.gov.tw/V8/E/P/Typhoon/TY_NEWS.html', analysis_kind: 'official_analysis' },
+        { id: 'CMA', label: 'China Meteorological Administration', source_label: 'CMA / NMC Typhoon Network', source_url: 'https://typhoon.nmc.cn/web.html', analysis_kind: 'official_analysis' },
+        { id: 'KMA', label: 'Korea Meteorological Administration', source_label: 'KMA typhoon analysis', source_url: 'https://www.weather.go.kr/neng/typhoon/typhoon-information.do', analysis_kind: 'official_analysis' },
+        { id: 'MFR', label: 'Météo-France La Réunion', source_label: 'RSMC La Réunion cyclone activity', source_url: 'https://meteofrance.re/fr/cyclone/activite-cyclonique-en-cours', analysis_kind: 'official_analysis' },
+        { id: 'BOM', label: 'Australian Bureau of Meteorology', source_label: 'BoM tropical cyclone warnings', source_url: 'https://www.bom.gov.au/weather-and-climate/specialised-forecasts-and-observations/tropical-cyclone', analysis_kind: 'official_analysis' }
     ];
     const COMMON_DVORAK_AGENCIES = DVORAK_AGENCY_CATALOG.map(agency => agency.id);
     const DVORAK_AGENCY_INFO = Object.fromEntries(
@@ -697,14 +697,16 @@ function updateStormBanner(storm) {
     }
 
     // =====================================================
-    // Agency Dvorak Fixes — sourced from JTWC reasoning
+    // Agency Dvorak Fixes — independent official agency publications
     // =====================================================
     function getDvorakStormParams(storm) {
         const p = storm?.properties || {};
         return new URLSearchParams({
             storm_id: p.storm_id || '',
             storm_name: p.storm_name || '',
-            basin: p.sub_basin || ''
+            basin: p.sub_basin || '',
+            lat: Number.isFinite(Number(p.center_latitude)) ? String(p.center_latitude) : '',
+            lon: Number.isFinite(Number(p.center_longitude)) ? String(p.center_longitude) : ''
         });
     }
 
@@ -728,7 +730,7 @@ function updateStormBanner(storm) {
                 <span></span><strong></strong><i></i>
             </div>`).join('');
         if (DOM.dvorakMeta) {
-            DOM.dvorakMeta.innerHTML = '<span class="dvorak-source-note">Checking the current JTWC prognostic reasoning…</span>';
+            DOM.dvorakMeta.innerHTML = '<span class="dvorak-source-note">Checking each agency’s own official publication…</span>';
         }
     }
 
@@ -749,35 +751,69 @@ function updateStormBanner(storm) {
         if (!Array.isArray(data?.agency_catalog) || !data.agency_catalog.length) {
             return DVORAK_AGENCY_CATALOG;
         }
+        const localById = Object.fromEntries(DVORAK_AGENCY_CATALOG.map(item => [item.id, item]));
         const catalog = data.agency_catalog
             .filter(item => item && /^[A-Z0-9-]{2,18}$/.test(String(item.id || '').toUpperCase()))
-            .map(item => ({
-                id: String(item.id).toUpperCase(),
-                label: String(item.label || item.id).slice(0, 80)
-            }));
+            .map(item => {
+                const id = String(item.id).toUpperCase();
+                const local = localById[id] || {};
+                return {
+                    ...local,
+                    id,
+                    label: String(item.label || local.label || item.id).slice(0, 80),
+                    source_label: String(item.source_label || local.source_label || '').slice(0, 120),
+                    source_url: typeof item.source_url === 'string' ? item.source_url : (local.source_url || ''),
+                    analysis_kind: item.analysis_kind || local.analysis_kind || 'official_analysis'
+                };
+            });
         return catalog.length ? catalog : DVORAK_AGENCY_CATALOG;
     }
 
-    function createDvorakCard(agency, fix, agencyInfo) {
-        const hasFix = Boolean(fix && (fix.t_number || Number.isFinite(fix.knots)));
-        const tNumber = hasFix && fix.t_number ? esc(fix.t_number) : '—';
-        const wind = hasFix && Number.isFinite(fix.knots)
-            ? `${fix.knots} <small>kt</small>`
-            : 'Not reported';
+    function isOfficialSourceURL(value) {
+        try {
+            const url = new URL(value);
+            return url.protocol === 'https:' && /(?:\.gov(?:\.[a-z]{2})?$|\.mil$|\.dost\.gov\.ph$|\.go\.kr$|\.go\.jp$|\.gov\.tw$|\.nmc\.cn$|\.imd\.gov\.in$|\.bom\.gov\.au$|meteofrance\.re$)/i.test(url.hostname);
+        } catch {
+            return false;
+        }
+    }
+
+    function agencyValueLabel(fix) {
+        if (!fix) return 'Not reported';
+        if (Number.isFinite(fix.knots)) return `${fix.knots} <small>kt</small>`;
+        if (Number.isFinite(fix.wind_ms)) return `${fix.wind_ms} <small>m/s</small>`;
+        if (Number.isFinite(fix.wind_kmh)) return `${fix.wind_kmh} <small>km/h</small>`;
+        if (Number.isFinite(fix.pressure_hpa)) return `${fix.pressure_hpa} <small>hPa</small>`;
+        return 'Published analysis';
+    }
+
+    function createDvorakCard(agency, fix, agencyMeta, status) {
+        const hasFix = Boolean(fix && (fix.t_number || Number.isFinite(fix.knots) || Number.isFinite(fix.wind_ms)
+            || Number.isFinite(fix.wind_kmh) || Number.isFinite(fix.pressure_hpa) || fix.intensity_label));
+        const primary = hasFix ? esc(fix.t_number || fix.intensity_label || 'Analysis') : '—';
+        const value = hasFix ? agencyValueLabel(fix) : 'No current value';
+        const kind = fix?.analysis_kind || agencyMeta?.analysis_kind || 'official_analysis';
+        const kindLabel = kind === 'dvorak' ? 'Dvorak fix' : 'Official analysis';
         const time = hasFix && fix.time ? `Valid ${esc(fix.time)}` :
-            hasFix ? 'Latest JTWC table' : 'Not listed in latest table';
+            hasFix ? kindLabel : (status?.message || 'No agency publication matched this storm');
+        const source = fix?.source || status?.source || agencyMeta?.source_url || '';
+        const sourceLabel = fix?.source_label || status?.source_label || agencyMeta?.source_label || 'Official source';
+        const sourceLink = isOfficialSourceURL(source)
+            ? `<a class="dvorak-card-source" href="${esc(source)}" target="_blank" rel="noopener">${esc(sourceLabel)} ↗</a>`
+            : `<span class="dvorak-card-source">${esc(sourceLabel)}</span>`;
         const title = hasFix && fix.raw ? ` title="${esc(fix.raw)}"` : '';
         return `
             <article class="dvorak-card${hasFix ? '' : ' is-unavailable'}"${title}>
                 <div class="dvorak-card-top">
                     <span class="dvorak-agency-code">${esc(agency)}</span>
-                    <span class="dvorak-agency-name">${esc(getDvorakAgencyLabel(agency, agencyInfo))}</span>
+                    <span class="dvorak-agency-name">${esc(agencyMeta?.label || getDvorakAgencyLabel(agency))}</span>
                 </div>
                 <div class="dvorak-values">
-                    <strong class="dvorak-t-number">${tNumber}</strong>
-                    <span class="dvorak-wind">${wind}</span>
+                    <strong class="dvorak-t-number${kind === 'dvorak' ? '' : ' is-analysis'}">${primary}</strong>
+                    <span class="dvorak-wind">${value}</span>
                 </div>
                 <span class="dvorak-card-time">${time}</span>
+                ${sourceLink}
             </article>`;
     }
 
@@ -803,43 +839,51 @@ function updateStormBanner(storm) {
 
     function renderDvorakFixes(data, storm) {
         if (!DOM.dvorakGrid) return;
-        if (!data || data.status !== 'ok') {
+        // Even when no centre has a matching value, keep every agency card
+        // visible with its own source link and a precise status. This makes it
+        // clear that no JTWC value is being substituted behind the scenes.
+        if (!data || !Array.isArray(data.agency_catalog)) {
             renderDvorakUnavailable(data, storm);
             return;
         }
-
+        const hasPublishedValues = data.status === 'ok';
         const fixes = Array.isArray(data.agencies) ? data.agencies : [];
         const byAgency = new Map(fixes
             .filter(fix => fix && fix.agency)
             .map(fix => [String(fix.agency).toUpperCase(), fix]));
         const agencyCatalog = getDvorakAgencyCatalog(data);
-        const agencyInfo = Object.fromEntries(agencyCatalog.map(item => [item.id, item.label]));
+        const catalogById = new Map(agencyCatalog.map(item => [item.id, item]));
+        const statuses = new Map((Array.isArray(data.agency_statuses) ? data.agency_statuses : [])
+            .filter(item => item && item.agency)
+            .map(item => [String(item.agency).toUpperCase(), item]));
         const listedAgencies = agencyCatalog.map(item => item.id);
         const agencyOrder = [...listedAgencies, ...fixes.map(fix => String(fix.agency || '').toUpperCase())
             .filter(agency => agency && !listedAgencies.includes(agency))];
 
-        DOM.dvorakPanel?.classList.remove('is-loading', 'has-error');
+        DOM.dvorakPanel?.classList.remove('is-loading');
+        DOM.dvorakPanel?.classList.toggle('has-error', !hasPublishedValues);
         DOM.dvorakStatus.textContent = data.stale
-            ? `${getStormDisplayName(storm)} • Last published agency estimates (live source unreachable)`
-            : `${getStormDisplayName(storm)} • Latest subjective agency intensity estimates`;
+            ? `${getStormDisplayName(storm)} • Last agency-published estimates (live source unreachable)`
+            : hasPublishedValues
+                ? `${getStormDisplayName(storm)} • Independent official agency analyses`
+                : `${getStormDisplayName(storm)} • No matching agency publication is available right now`;
         DOM.dvorakGrid.className = 'dvorak-fix-grid';
-        DOM.dvorakGrid.innerHTML = agencyOrder.map(agency => createDvorakCard(agency, byAgency.get(agency), agencyInfo)).join('');
+        DOM.dvorakGrid.innerHTML = agencyOrder.map(agency => createDvorakCard(
+            agency,
+            byAgency.get(agency),
+            catalogById.get(agency) || { id: agency, label: getDvorakAgencyLabel(agency) },
+            statuses.get(agency)
+        )).join('');
 
-        const product = data.product_id ? `Product ${esc(data.product_id)}` : 'Current JTWC product';
-        const issued = data.issued ? `issued ${esc(data.issued)}` : '';
         const fetched = formatDvorakFetched(data.fetched_at);
-        const automatedCount = Array.isArray(data.automated) ? data.automated.length : 0;
-        const sourceLink = typeof data.source === 'string' && /^https:\/\/www\.(?:metoc(?:\.dc3n)?\.navy\.mil|nhc\.noaa\.gov)\//.test(data.source)
-            ? `<a href="${esc(data.source)}" target="_blank" rel="noopener">View official reasoning ↗</a>`
-            : '';
+        const reported = fixes.length;
         const freshnessNote = data.stale
-            ? `<span class="dvorak-source-note dvorak-stale-note">⚠ ${esc(data.message || 'Last officially published table — live sources are unreachable right now.')}</span>`
+            ? `<span class="dvorak-source-note dvorak-stale-note">⚠ ${esc(data.message || 'Last agency-published values — live sources are unreachable right now.')}</span>`
             : '';
         if (DOM.dvorakMeta) {
             DOM.dvorakMeta.innerHTML = `
                 ${freshnessNote}
-                <span class="dvorak-source-note">${data.source && data.source.includes('nhc.noaa.gov') ? 'NHC forecast discussion' : 'JTWC prognostic reasoning'} · ${product}${issued ? ` · ${issued}` : ''}${fetched ? ` · fetched ${esc(fetched)}` : ''}${automatedCount ? ` · ${automatedCount} automated estimate${automatedCount === 1 ? '' : 's'} also available` : ''}</span>
-                ${sourceLink}`;
+                <span class="dvorak-source-note">Independent source mode · ${reported} agency-published value${reported === 1 ? '' : 's'}${fetched ? ` · checked ${esc(fetched)}` : ''}. A Dvorak T-number is shown only when that agency publishes one; other cards retain the agency’s operational-analysis unit.</span>`;
         }
     }
 

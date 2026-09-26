@@ -113,3 +113,40 @@ ANALYSIS CONFIDENCE:`);
         ['KNES', 'T3.5', 55, '260600Z']
     ]);
 });
+
+test('parses CWA and KMA values from their own official analysis layouts', () => {
+    const { parseCwaAnalysis, parseKmaAnalysis, parseStormReference } = require('../fix.js');
+    const reference = parseStormReference(new URLSearchParams('storm_id=wp252026&storm_name=Surigae&basin=WP'));
+    const cwa = parseCwaAnalysis(`
+        SEVERE TROPICAL STORM SURIGAE
+        Analysis 0600UTC 26 September 2026
+        Minimum Pressure 980 hPa
+        Maximum Wind Speed 30 m/s
+    `, reference);
+    assert.deepEqual([cwa.agency, cwa.wind_ms, cwa.pressure_hpa, cwa.analysis_kind], ['RCTP', 30, 980, 'official_analysis']);
+
+    const kma = parseKmaAnalysis(`No.26 SURIGAE KMA Issued at KST: Sat, 26 Sep 2026, 16:00
+        Sat, 26 Sep 2026, 06:00 Analysis 2 27 97 985 22.9 127.0 N 14`, reference);
+    assert.deepEqual([kma.agency, kma.wind_ms, kma.wind_kmh, kma.pressure_hpa], ['KMA', 27, 97, 985]);
+    assert.match(kma.source, /weather\.go\.kr/);
+});
+
+test('only accepts an IMD Dvorak FT when the official bulletin identifies the storm', () => {
+    const { parseDemsBulletin, parseStormReference } = require('../fix.js');
+    const reference = parseStormReference(new URLSearchParams('storm_id=io022026&storm_name=Asani&basin=NI&lat=16.3&lon=89.4'));
+    const matching = parseDemsBulletin(`TCIN50 DEMS 230600 SATELLITE FIX BULLETIN
+        CYCLONIC STORM ASANI CENTERED AT 16.3N / 89.4E. DT = PT = MET. HENCE FT = 2.5.`, reference,
+        'https://rsmcnewdelhi.imd.gov.in/uploads/archive/73/73_e76271_splbltn.pdf');
+    assert.deepEqual([matching.agency, matching.t_number, matching.source_kind], ['DEMS', 'T2.5', 'official_text_render']);
+    assert.equal(parseDemsBulletin('TCIN50 DEMS 230600 HENCE FT = 4.0.', reference, 'https://example.test/x.pdf'), null);
+});
+
+test('agency catalog records separate official publishers rather than a single JTWC source', () => {
+    const { AGENCY_CATALOG } = require('../fix.js');
+    const byId = Object.fromEntries(AGENCY_CATALOG.map(item => [item.id, item]));
+    assert.match(byId.DEMS.source_url, /rsmcnewdelhi\.imd\.gov\.in/);
+    assert.match(byId.RCTP.source_url, /cwa\.gov\.tw/);
+    assert.match(byId.KMA.source_url, /weather\.go\.kr/);
+    assert.match(byId.CMA.source_url, /typhoon\.nmc\.cn/);
+    assert.notEqual(byId.DEMS.source_url, byId.PGTW.source_url);
+});
