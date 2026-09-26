@@ -1786,6 +1786,12 @@ body {
     line-height: 1.35;
 }
 
+.dvorak-stale-note {
+    flex: 1 1 100%;
+    color: #fbbf24;
+    font-weight: 600;
+}
+
 .dvorak-section-foot a {
     flex: 0 0 auto;
     color: var(--accent-cyan);
