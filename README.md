@@ -14,6 +14,7 @@ Professional microwave satellite imagery viewer for tropical cyclones and active
 - 🔍 **Image Lightbox** — Full-screen image viewer with keyboard/touch navigation
 - 🌙 **Dark Theme** — Professional dark interface designed for satellite imagery
 - 📡 **Microwave Focus** — Highlights microwave sensors and products
+- 📈 **Live Agency Dvorak Fixes** — Storm-specific subjective fixes from the latest official JTWC reasoning, with cards for JTWC/PGTW, DEMS, JMA/RJTD, NOAA SAB/KNES, NHC, PAGASA, Taiwan CWA/RCTP, CMA, KMA, Météo-France, and Australia BoM; every additional agency listed in a product appears automatically
 
 ## 📁 Files
 
@@ -24,35 +25,29 @@ Professional microwave satellite imagery viewer for tropical cyclones and active
 | `app.js` | Application logic (fetches data directly from NRL API) |
 | `index.php` | PHP version of the main page (for PHP hosting) |
 | `api.php` | PHP proxy (optional, for hosts that block CORS) |
+| `fix.php` | Production JTWC Dvorak-fix endpoint; safely parses official storm reasoning |
+| `fix.js` | Zero-dependency local preview server with the same `/fix.php` endpoint |
 | `.htaccess` | Apache configuration (for shared hosting) |
 
 ## 🚀 Deployment
 
-### Option 1: Static Hosting (Recommended)
-Simply upload `index.html`, `style.css`, and `app.js` to any web hosting:
-- GitHub Pages
-- Netlify
-- Vercel
-- Cloudflare Pages
-- Any shared hosting (just upload the 3 files)
+### Option 1: PHP Hosting — full live dashboard (recommended)
+Upload all files to a PHP-enabled server. `fix.php` is a same-origin, read-only JTWC endpoint that retrieves and parses the current official prognostic reasoning. It is required for the live **Agency Dvorak Fixes** panel, avoids browser CORS problems, accepts no arbitrary remote URLs, and caches a product for only four minutes. The panel's **Refresh** button bypasses that short cache.
 
-**Note:** The NRL API supports CORS, so no server-side proxy is needed!
+- Satellite imagery continues to use the direct NRL API.
+- `api.php` remains available as a fallback proxy for imagery hosts that need it.
+- The Dvorak panel never invents, estimates, or carries forward an agency fix. If JTWC does not publish a matching current table, it says so clearly.
 
-### Option 2: PHP Hosting
-Upload all files to a PHP-enabled server:
-- The site will automatically use direct API calls
-- `api.php` is available as a fallback proxy if needed
-
-### Option 3: Local Testing
+### Option 2: Local preview / Node.js
+No package installation is needed:
 ```bash
-# Using Python
 cd satellite-viewer
-python3 -m http.server 8080
-
-# Using Node.js
-npx serve .
+node fix.js
 ```
-Then open `http://localhost:8080`
+Open `http://localhost:4173`. The local server serves the site and mirrors the production `/fix.php` Dvorak endpoint.
+
+### Option 3: Static-only hosting
+`index.html`, `style.css`, and `app.js` can still be deployed to static hosting for the NRL imagery viewer. Static-only hosts cannot run `fix.php`, so the Dvorak panel will show an explicit unavailable state rather than inaccurate data. Use PHP hosting or provide an equivalent same-origin endpoint for the complete live dashboard.
 
 ## 🎨 Customization
 

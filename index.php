@@ -95,6 +95,33 @@ header("Expires: 0");
             </div>
         </div>
 
+
+        <!-- Live Agency Dvorak Fixes -->
+        <section class="dvorak-section" id="dvorakPanel" aria-labelledby="dvorakTitle" aria-live="polite">
+            <div class="dvorak-section-head">
+                <div class="dvorak-heading">
+                    <div class="dvorak-eyebrow"><span class="dvorak-live-dot"></span> LIVE OFFICIAL ANALYSIS</div>
+                    <div>
+                        <h2 id="dvorakTitle">Agency Dvorak Fixes</h2>
+                        <p id="dvorakStatus">Select a storm to load the latest agency intensity estimates.</p>
+                    </div>
+                </div>
+                <button class="dvorak-refresh" id="dvorakRefresh" type="button" disabled aria-label="Refresh agency Dvorak fixes">
+                    <svg aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                    Refresh
+                </button>
+            </div>
+            <div class="dvorak-fix-grid is-idle" id="dvorakGrid">
+                <div class="dvorak-empty">
+                    <span class="dvorak-empty-icon">◌</span>
+                    <span>Storm-specific agency fixes will appear here.</span>
+                </div>
+            </div>
+            <div class="dvorak-section-foot" id="dvorakMeta">
+                <span class="dvorak-source-note">Source: JTWC prognostic reasoning — values are displayed only when officially published.</span>
+            </div>
+        </section>
+
         <!-- Filters Section -->
         <section class="filters-section">
             <button class="filters-toggle" id="filtersToggle">
